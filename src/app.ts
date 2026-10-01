@@ -16,7 +16,11 @@ export const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGIN.split(',').map((o) => o.trim()) }));
+// Orígenes permitidos: se toleran comillas, espacios y la barra final al pegarlos en el hosting
+const origenes = env.CORS_ORIGIN.split(',')
+  .map((o) => o.trim().replace(/^['"]|['"]$/g, '').replace(/\/+$/, ''))
+  .filter(Boolean);
+app.use(cors({ origin: origenes }));
 app.use(express.json({ limit: '100kb' }));
 
 app.get('/api/salud', async (_req, res) => {
