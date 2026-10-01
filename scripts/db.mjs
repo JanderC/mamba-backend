@@ -23,7 +23,7 @@ if (!url) {
 
 const client = new pg.Client({
   connectionString: url,
-  ssl: /sslmode=require|neon\.tech/.test(url) ? { rejectUnauthorized: false } : undefined,
+  ssl: /neon\.tech/.test(url) && !/sslmode=/.test(url) ? true : undefined,
 });
 
 const correr = async (archivo) => {

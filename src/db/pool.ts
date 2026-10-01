@@ -1,8 +1,9 @@
 import pg from 'pg';
 import { env } from '../config/env.js';
 
-// Neon y cualquier Postgres remoto requieren SSL; el local normalmente no.
-const needsSsl = /sslmode=require|neon\.tech/.test(env.DATABASE_URL);
+// Si la URL trae sslmode (Neon: sslmode=verify-full) el driver negocia SSL y verifica el certificado.
+// Solo se fuerza SSL cuando es un host de Neon sin sslmode en la URL. El Postgres local va sin SSL.
+const forzarSsl = /neon\.tech/.test(env.DATABASE_URL) && !/sslmode=/.test(env.DATABASE_URL);
 
 // Postgres devuelve DATE como string 'YYYY-MM-DD' (evita corrimientos de zona horaria)
 pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
@@ -11,7 +12,7 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (v) => (v === null ? null : Numbe
 
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
-  ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+  ssl: forzarSsl ? true : undefined,
   max: 10,
   idleTimeoutMillis: 30_000,
 });
