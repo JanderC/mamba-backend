@@ -4,6 +4,7 @@ import { query } from '../../db/pool.js';
 import { R, permitir } from '../../middlewares/auth.js';
 import { JORNADA_HOY, TZ, jornada, leerAjustes, tasaVigente } from '../../services/sistema.js';
 import { desdeUSD, redondearMoneda } from '../../utils/moneda.js';
+import { deudaTotal } from './creditos.routes.js';
 
 export const reportesRouter = Router();
 
@@ -47,6 +48,7 @@ reportesRouter.get('/tablero', async (req, res) => {
           ticket_promedio: Number(cobrado.cuentas) ? enPrincipal(cobrado.usd / cobrado.cuentas) : 0,
           por_cobrar: enPrincipal(abiertas.usd), por_hora: porHora.map((h) => ({ hora: h.hora, total: enPrincipal(h.usd) })) }
       : null,
+    creditos: verDinero && tasa ? await deudaTotal() : null,
     cuentas_abiertas: Number(abiertas.n),
     personas_con_cuenta: Number(abiertas.personas),
     capacidad: ajustes.capacidad_maxima,
@@ -66,7 +68,7 @@ reportesRouter.get('/ventas', permitir(...R.gestion), async (req, res) => {
   const { desde, hasta } = rango.parse(req.query);
   const [ajustes, tasa] = await Promise.all([leerAjustes(), tasaVigente()]);
   const P = `NOT p.anulado AND ${jornada('p.fecha')} BETWEEN $1 AND $2`;
-  const I = `i.estado <> 'anulado' AND c.estado = 'pagada' AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2`;
+  const I = `i.estado <> 'anulado' AND c.estado IN ('pagada','fiada') AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2`;
   const params = [desde, hasta];
 
   const [porDia, porMetodo, porProducto, porCategoria, porMesonero, porZona, [resumen], [anulaciones]] = await Promise.all([
@@ -86,17 +88,17 @@ reportesRouter.get('/ventas', permitir(...R.gestion), async (req, res) => {
     query(
       `SELECT COALESCE(u.nombre, '—') AS mesonero, count(*) AS cuentas, SUM(c.total_usd) AS usd, SUM(c.personas) AS personas
          FROM cuentas c LEFT JOIN usuarios u ON u.id = c.mesonero_id
-        WHERE c.estado = 'pagada' AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 3 DESC`, params),
+        WHERE c.estado IN ('pagada','fiada') AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 3 DESC`, params),
     query(
       `SELECT COALESCE(z.nombre, CASE c.tipo WHEN 'llevar' THEN 'Para llevar' ELSE 'Barra (sin puesto)' END) AS zona,
               count(*) AS cuentas, SUM(c.total_usd) AS usd
          FROM cuentas c LEFT JOIN mesas m ON m.id = c.mesa_id LEFT JOIN zonas z ON z.id = m.zona_id
-        WHERE c.estado = 'pagada' AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 3 DESC`, params),
+        WHERE c.estado IN ('pagada','fiada') AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 3 DESC`, params),
     query(
       `SELECT count(*) AS cuentas, COALESCE(SUM(total_usd),0) AS usd, COALESCE(SUM(personas),0) AS personas,
               COALESCE(SUM(servicio / NULLIF(total,0) * total_usd),0) AS servicio_usd,
               COALESCE(SUM(descuento / NULLIF(total,0) * total_usd),0) AS descuento_usd
-         FROM cuentas c WHERE c.estado = 'pagada' AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2`, params),
+         FROM cuentas c WHERE c.estado IN ('pagada','fiada') AND ${jornada('c.cerrada_en')} BETWEEN $1 AND $2`, params),
     query(`SELECT count(*) AS n FROM cuenta_items i WHERE i.estado = 'anulado' AND ${jornada('i.creado_en')} BETWEEN $1 AND $2`, params),
   ]);
 

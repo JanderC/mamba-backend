@@ -321,7 +321,7 @@ CREATE TABLE IF NOT EXISTS cuentas (
   cliente_id        integer REFERENCES clientes(id),
   nombre_cliente    text,
   personas          smallint NOT NULL DEFAULT 1 CHECK (personas > 0),
-  estado            text NOT NULL DEFAULT 'abierta' CHECK (estado IN ('abierta','pagada','anulada')),
+  estado            text NOT NULL DEFAULT 'abierta' CHECK (estado IN ('abierta','pagada','anulada','fiada')),
   moneda            char(3) NOT NULL DEFAULT 'COP' CHECK (moneda IN ('USD','COP','VES')),
   servicio_pct      numeric(5,2) NOT NULL DEFAULT 0 CHECK (servicio_pct BETWEEN 0 AND 100),
   descuento         numeric(14,2) NOT NULL DEFAULT 0 CHECK (descuento >= 0),
@@ -425,6 +425,39 @@ ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS cobro_nota           text;
 CREATE INDEX IF NOT EXISTS idx_cuentas_cola_cobro ON cuentas (cobro_solicitado_en) WHERE estado = 'abierta' AND cobro_solicitado_en IS NOT NULL;
 
 ALTER TABLE reservas ADD COLUMN IF NOT EXISTS mesa_id integer REFERENCES mesas(id);
+
+-- =====================================================================
+--  CRÉDITOS: cuentas fiadas y clientes que consumieron y se fueron
+-- =====================================================================
+-- Una cuenta 'fiada' está cerrada pero su saldo quedó como deuda del cliente
+ALTER TABLE cuentas DROP CONSTRAINT IF EXISTS cuentas_estado_check;
+ALTER TABLE cuentas ADD CONSTRAINT cuentas_estado_check CHECK (estado IN ('abierta','pagada','anulada','fiada'));
+ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS fiado_monto  numeric(14,2);
+ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS fiado_motivo text;          -- 'fiado' | 'se_fue'
+
+-- Estado de cuenta del cliente: cargos (lo que quedó debiendo) y abonos (lo que va pagando).
+-- La deuda se lleva en la moneda en que se consumió; el abono puede entrar en cualquier moneda.
+CREATE TABLE IF NOT EXISTS movimientos_credito (
+  id             bigserial PRIMARY KEY,
+  cliente_id     integer NOT NULL REFERENCES clientes(id),
+  tipo           text NOT NULL CHECK (tipo IN ('cargo','abono')),
+  motivo         text CHECK (motivo IN ('fiado','se_fue')),
+  moneda         char(3) NOT NULL CHECK (moneda IN ('USD','COP','VES')),   -- moneda de la deuda
+  monto          numeric(14,2) NOT NULL CHECK (monto > 0),                 -- en la moneda de la deuda
+  monto_usd      numeric(14,4) NOT NULL DEFAULT 0,
+  cuenta_id      bigint REFERENCES cuentas(id) ON DELETE SET NULL,
+  -- Solo abonos: lo que realmente entregó el cliente y por dónde entró
+  pago_moneda    char(3) CHECK (pago_moneda IN ('USD','COP','VES')),
+  pago_monto     numeric(14,2),
+  metodo_pago_id integer REFERENCES metodos_pago(id),
+  sesion_caja_id integer REFERENCES sesiones_caja(id),
+  referencia     text,
+  nota           text,
+  usuario_id     integer REFERENCES usuarios(id),
+  fecha          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_credito_cliente ON movimientos_credito (cliente_id, fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_credito_sesion  ON movimientos_credito (sesion_caja_id) WHERE tipo = 'abono';
 
 -- =====================================================================
 --  RECORDATORIOS

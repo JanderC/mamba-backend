@@ -5,6 +5,7 @@ import { cajaRouter } from './caja.routes.js';
 import { catalogoRouter } from './catalogo.routes.js';
 import { clientesRouter, eventosAdminRouter, recordatoriosRouter, reservasAdminRouter } from './comercial.routes.js';
 import { cajasCrud, configRouter, metodosRouter, tasasRouter } from './configuracion.routes.js';
+import { creditosRouter, fiarCuenta } from './creditos.routes.js';
 import { inventarioRouter } from './inventario.routes.js';
 import { reportesRouter } from './reportes.routes.js';
 import { salonRouter } from './salon.routes.js';
@@ -26,7 +27,9 @@ adminRouter.get('/vivo', conectarVivo);
 // Operación
 adminRouter.use('/salon', salonRouter);
 adminRouter.use('/pos', permitir(...R.servicio), posRouter);
+adminRouter.use('/cuentas/:id/fiar', fiarCuenta);
 adminRouter.use('/cuentas', cuentasRouter);
+adminRouter.use('/creditos', creditosRouter);
 adminRouter.use('/comandas', comandasRouter);
 adminRouter.use('/caja', cajaRouter);
 adminRouter.use('/cajas', cajasCrud);

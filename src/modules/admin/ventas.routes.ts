@@ -128,7 +128,7 @@ cuentasRouter.post('/', permitir(...R.servicio), async (req, res) => {
 });
 
 const listaSchema = z.object({
-  estado: z.enum(['abierta', 'pagada', 'anulada']).optional(),
+  estado: z.enum(['abierta', 'pagada', 'anulada', 'fiada']).optional(),
   tipo: z.enum(['mesa', 'barra', 'llevar']).optional(),
   desde: z.iso.date().optional(),
   hasta: z.iso.date().optional(),
@@ -141,13 +141,14 @@ cuentasRouter.get('/', permitir(...R.servicio), async (req, res) => {
   res.json(
     await query(
       `SELECT c.id, c.numero, c.tipo, c.estado, c.moneda, c.personas, c.nombre_cliente, c.subtotal, c.servicio, c.descuento, c.total,
-              c.pagado, c.total_usd, c.abierta_en, c.cerrada_en, m.numero AS mesa_numero, m.nombre AS mesa_nombre, z.nombre AS zona,
+              c.pagado, c.total_usd, c.abierta_en, c.cerrada_en, c.fiado_monto, c.fiado_motivo, cl.nombre AS cliente, m.numero AS mesa_numero, m.nombre AS mesa_nombre, z.nombre AS zona,
               u.nombre AS mesonero,
               (SELECT count(*) FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado <> 'anulado') AS items
          FROM cuentas c
          LEFT JOIN mesas m ON m.id = c.mesa_id
          LEFT JOIN zonas z ON z.id = m.zona_id
          LEFT JOIN usuarios u ON u.id = c.mesonero_id
+         LEFT JOIN clientes cl ON cl.id = c.cliente_id
         WHERE ($1::text IS NULL OR c.estado = $1)
           AND ($2::text IS NULL OR c.tipo = $2)
           AND ($3::date IS NULL OR ${fecha} >= $3)

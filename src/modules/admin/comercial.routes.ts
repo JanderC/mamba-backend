@@ -253,8 +253,8 @@ clientesRouter.get('/', async (req, res) => {
   res.json(
     await query(
       `SELECT c.*,
-              (SELECT count(*) FROM cuentas x WHERE x.cliente_id = c.id AND x.estado = 'pagada') AS visitas,
-              (SELECT COALESCE(SUM(total_usd),0) FROM cuentas x WHERE x.cliente_id = c.id AND x.estado = 'pagada') AS consumo_usd
+              (SELECT count(*) FROM cuentas x WHERE x.cliente_id = c.id AND x.estado IN ('pagada','fiada')) AS visitas,
+              (SELECT COALESCE(SUM(total_usd),0) FROM cuentas x WHERE x.cliente_id = c.id AND x.estado IN ('pagada','fiada')) AS consumo_usd
          FROM clientes c
         WHERE ($1 = '' OR c.nombre ILIKE '%'||$1||'%' OR c.telefono ILIKE '%'||$1||'%' OR c.documento ILIKE '%'||$1||'%')
         ORDER BY c.vip DESC, c.nombre LIMIT 500`,

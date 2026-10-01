@@ -24,6 +24,9 @@ async function calcularResumen(sesionId: number, db: Db = pool) {
   );
   if (!sesion) throw notFound('Sesión de caja');
 
+  const abonosCredito = await query(
+    `SELECT a.pago_moneda AS moneda, SUM(a.pago_monto) AS total, count(*) AS n FROM movimientos_credito a JOIN metodos_pago m ON m.id = a.metodo_pago_id
+      WHERE a.sesion_caja_id = $1 AND a.tipo = 'abono' AND m.es_efectivo GROUP BY a.pago_moneda`, [sesionId], db);
   const [recibido, vueltos, movs, metodos, [conteo]] = await Promise.all([
     query(
       `SELECT p.moneda, SUM(p.monto_recibido) AS total FROM pagos p JOIN metodos_pago m ON m.id = p.metodo_pago_id
@@ -41,14 +44,15 @@ async function calcularResumen(sesionId: number, db: Db = pool) {
       [sesionId], db),
   ]);
 
-  const efectivo = porMoneda(), vuelto = porMoneda(), ingresos = porMoneda(), egresos = porMoneda(), esperado = porMoneda();
+  const efectivo = porMoneda(), vuelto = porMoneda(), ingresos = porMoneda(), egresos = porMoneda(), esperado = porMoneda(), abonos = porMoneda();
+  for (const r of abonosCredito) abonos[r.moneda as Moneda] = Number(r.total);
   for (const r of recibido) efectivo[r.moneda as Moneda] = Number(r.total);
   for (const r of vueltos) vuelto[r.moneda as Moneda] = Number(r.total);
   for (const r of movs) (r.tipo === 'ingreso' ? ingresos : egresos)[r.moneda as Moneda] = Number(r.total);
   for (const m of MONEDAS)
-    esperado[m] = redondear(Number(sesion[`fondo_inicial_${m.toLowerCase()}`]) + efectivo[m] - vuelto[m] + ingresos[m] - egresos[m], 2);
+    esperado[m] = redondear(Number(sesion[`fondo_inicial_${m.toLowerCase()}`]) + efectivo[m] - vuelto[m] + abonos[m] + ingresos[m] - egresos[m], 2);
 
-  return { sesion, efectivo_recibido: efectivo, vueltos: vuelto, ingresos, egresos, esperado, por_metodo: metodos,
+  return { sesion, efectivo_recibido: efectivo, vueltos: vuelto, abonos_credito: abonos, ingresos, egresos, esperado, por_metodo: metodos,
     cuentas_cobradas: Number(conteo.cuentas), total_usd: Number(conteo.total_usd) };
 }
 
