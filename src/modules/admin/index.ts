@@ -8,6 +8,7 @@ import { cajasCrud, configRouter, metodosRouter, tasasRouter } from './configura
 import { inventarioRouter } from './inventario.routes.js';
 import { reportesRouter } from './reportes.routes.js';
 import { salonRouter } from './salon.routes.js';
+import { conectarVivo } from '../../services/vivo.js';
 import { comandasRouter, cuentasRouter, posRouter } from './ventas.routes.js';
 
 /**
@@ -18,6 +19,9 @@ export const adminRouter = Router();
 
 adminRouter.use('/auth', authRouter);
 adminRouter.use(autenticar);
+
+// Tiempo real: pedidos, comandas listas y cola de cobro
+adminRouter.get('/vivo', conectarVivo);
 
 // Operación
 adminRouter.use('/salon', salonRouter);

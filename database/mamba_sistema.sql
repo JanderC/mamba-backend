@@ -418,6 +418,12 @@ CREATE INDEX IF NOT EXISTS idx_pagos_sesion ON pagos (sesion_caja_id);
 -- Puesto específico (taburete de barra) cuando la cuenta es de una sola persona
 ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS asiento smallint;
 
+-- Cola de cobro: el mesonero pasa la cuenta a caja desde la tablet
+ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS cobro_solicitado_en  timestamptz;
+ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS cobro_solicitado_por integer REFERENCES usuarios(id);
+ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS cobro_nota           text;
+CREATE INDEX IF NOT EXISTS idx_cuentas_cola_cobro ON cuentas (cobro_solicitado_en) WHERE estado = 'abierta' AND cobro_solicitado_en IS NOT NULL;
+
 ALTER TABLE reservas ADD COLUMN IF NOT EXISTS mesa_id integer REFERENCES mesas(id);
 
 -- =====================================================================

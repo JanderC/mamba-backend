@@ -25,7 +25,7 @@ salonRouter.get('/', permitir(...R.comandas, 'rrpp'), async (_req, res) => {
     query(`SELECT id, slug, nombre, color, es_vip, consumo_minimo_cop, orden FROM zonas WHERE activo ORDER BY orden`),
     query(`SELECT * FROM mesas WHERE activo ORDER BY numero`),
     query(
-      `SELECT c.id, c.numero, c.mesa_id, c.asiento, c.tipo, c.personas, c.nombre_cliente, c.total, c.pagado, c.moneda, c.abierta_en, u.nombre AS mesonero,
+      `SELECT c.id, c.numero, c.mesa_id, c.asiento, c.tipo, c.personas, c.cobro_solicitado_en, c.nombre_cliente, c.total, c.pagado, c.moneda, c.abierta_en, u.nombre AS mesonero,
               (SELECT count(*) FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado IN ('pendiente','preparando')) AS pendientes,
               (SELECT count(*) FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado = 'listo') AS listos
          FROM cuentas c LEFT JOIN usuarios u ON u.id = c.mesonero_id

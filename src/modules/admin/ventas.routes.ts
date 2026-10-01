@@ -4,6 +4,7 @@ import { query, tx } from '../../db/pool.js';
 import { R, permitir } from '../../middlewares/auth.js';
 import { agregarItems, anularCuenta, anularItem, cerrar, detalleCuenta, itemSchema, pagar, pagoSchema, recalcular } from '../../services/cuentas.js';
 import { jornada, leerAjustes, tasaVigente } from '../../services/sistema.js';
+import { emitir, lugarDe } from '../../services/vivo.js';
 import { HttpError, notFound } from '../../utils/http.js';
 import { MONEDAS, type Moneda, convertir, preciosEnTodas, redondearMoneda } from '../../utils/moneda.js';
 
@@ -121,7 +122,9 @@ export async function abrirCuenta(datos: z.infer<typeof abrirSchema>, usuarioId:
 
 cuentasRouter.post('/', permitir(...R.servicio), async (req, res) => {
   const id = await abrirCuenta(abrirSchema.parse(req.body), req.usuario.id);
-  res.status(201).json(await detalleCuenta(id));
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cuenta', accion: 'abierta', cuenta_id: id, mesonero_id: cuenta.mesonero_id });
+  res.status(201).json(cuenta);
 });
 
 const listaSchema = z.object({
@@ -154,6 +157,34 @@ cuentasRouter.get('/', permitir(...R.servicio), async (req, res) => {
       [f.estado ?? null, f.tipo ?? null, f.desde ?? null, f.hasta ?? null, f.q?.trim() || null],
     ),
   );
+});
+
+// ---------------------------------------------------------------------- Tablet del mesonero
+const SELECT_ACTIVA = `
+  SELECT c.id, c.numero, c.tipo, c.asiento, c.personas, c.nombre_cliente, c.moneda, c.total, c.pagado, c.abierta_en, c.mesonero_id,
+         c.cobro_solicitado_en, c.cobro_nota, m.numero AS mesa_numero, m.nombre AS mesa_nombre, m.tipo AS mesa_tipo, z.nombre AS zona,
+         u.nombre AS mesonero,
+         (SELECT count(*) FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado = 'pendiente') AS en_cola,
+         (SELECT count(*) FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado = 'preparando') AS preparando,
+         (SELECT count(*) FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado <> 'anulado') AS items,
+         COALESCE((SELECT json_agg(json_build_object('id', i.id, 'nombre', i.nombre, 'presentacion', i.presentacion, 'cantidad', i.cantidad,
+                                                     'estacion', i.estacion, 'asiento', i.asiento) ORDER BY i.listo_en)
+                     FROM cuenta_items i WHERE i.cuenta_id = c.id AND i.estado = 'listo'), '[]'::json) AS listos
+    FROM cuentas c
+    LEFT JOIN mesas m ON m.id = c.mesa_id
+    LEFT JOIN zonas z ON z.id = m.zona_id
+    LEFT JOIN usuarios u ON u.id = c.mesonero_id
+   WHERE c.estado = 'abierta'`;
+
+/** Cuentas abiertas del mesonero que consulta (o de todo el salón con ?todas=1) */
+cuentasRouter.get('/activas', permitir(...R.servicio), async (req, res) => {
+  const todas = req.query.todas === '1';
+  res.json(await query(`${SELECT_ACTIVA} AND ($1::int IS NULL OR c.mesonero_id = $1) ORDER BY c.abierta_en`, [todas ? null : req.usuario.id]));
+});
+
+/** Cola de cobro del cajero: las cuentas que los mesoneros han pasado a caja, en orden de llegada */
+cuentasRouter.get('/cola-cobro', permitir(...R.cobro), async (_req, res) => {
+  res.json(await query(`${SELECT_ACTIVA} AND c.cobro_solicitado_en IS NOT NULL ORDER BY c.cobro_solicitado_en`));
 });
 
 cuentasRouter.get('/:id', permitir(...R.servicio), async (req, res) => {
@@ -195,7 +226,9 @@ cuentasRouter.patch('/:id', permitir(...R.servicio), async (req, res) => {
     if (sets.length) await query(`UPDATE cuentas SET ${sets.join(', ')} WHERE id = $1`, vals, db);
     await recalcular(db, id);
   });
-  res.json(await detalleCuenta(id));
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cuenta', accion: 'editada', cuenta_id: id, mesonero_id: cuenta.mesonero_id });
+  res.json(cuenta);
 });
 
 cuentasRouter.post('/:id/items', permitir(...R.servicio), async (req, res) => {
@@ -204,14 +237,25 @@ cuentasRouter.post('/:id/items', permitir(...R.servicio), async (req, res) => {
     .object({ items: z.array(itemSchema).min(1, 'Agrega al menos un producto'), directo: z.boolean().default(false) })
     .parse(req.body);
   await tx((db) => agregarItems(db, id, items, req.usuario, directo));
-  res.status(201).json(await detalleCuenta(id));
+  const cuenta = await detalleCuenta(id);
+
+  // Aviso inmediato a barra y cocina: llega con la mesa, el cliente y quién lo tomó
+  const ronda = Math.max(...cuenta.items.map((i: { ronda: number }) => i.ronda));
+  const nuevos = cuenta.items.filter((i: { ronda: number }) => i.ronda === ronda);
+  emitir({
+    tipo: 'pedido', cuenta_id: id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente, mesonero: req.usuario.nombre,
+    estaciones: [...new Set(nuevos.map((i: { estacion: string }) => i.estacion))] as string[], items: nuevos.length, directo,
+  });
+  res.status(201).json(cuenta);
 });
 
 cuentasRouter.delete('/:id/items/:itemId', permitir(...R.servicio), async (req, res) => {
   const id = idNum(req.params.id);
   const { motivo } = z.object({ motivo: z.string().trim().min(3, 'Indica el motivo de la anulación') }).parse(req.body ?? {});
   await tx((db) => anularItem(db, id, idNum(req.params.itemId), motivo, req.usuario));
-  res.json(await detalleCuenta(id));
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cuenta', accion: 'item_anulado', cuenta_id: id, mesonero_id: cuenta.mesonero_id });
+  res.json(cuenta);
 });
 
 /** Reasignar un ítem a otro asiento (para dividir la cuenta por puesto) */
@@ -221,6 +265,31 @@ cuentasRouter.patch('/:id/items/:itemId', permitir(...R.servicio), async (req, r
   const r = await query(`UPDATE cuenta_items SET asiento = $3 WHERE id = $2 AND cuenta_id = $1 RETURNING id`, [id, idNum(req.params.itemId), asiento]);
   if (!r[0]) throw notFound('Ítem');
   res.json(await detalleCuenta(id));
+});
+
+// ---------------------------------------------------------------------- Mesonero → caja
+/** El mesonero pasa la cuenta a caja: aparece al instante en la cola del cajero */
+cuentasRouter.post('/:id/solicitar-cobro', permitir(...R.servicio), async (req, res) => {
+  const id = idNum(req.params.id);
+  const { nota } = z.object({ nota: z.string().trim().max(200).nullish() }).parse(req.body ?? {});
+  const [c] = await query(`SELECT estado, total FROM cuentas WHERE id = $1`, [id]);
+  if (!c) throw notFound('Cuenta');
+  if (c.estado !== 'abierta') throw new HttpError(409, 'La cuenta ya está cerrada');
+  if (Number(c.total) <= 0) throw new HttpError(400, 'La cuenta está vacía: no hay nada que cobrar');
+  await query(`UPDATE cuentas SET cobro_solicitado_en = now(), cobro_solicitado_por = $2, cobro_nota = $3 WHERE id = $1`, [id, req.usuario.id, nota || null]);
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cobro', accion: 'solicitado', cuenta_id: id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente,
+    mesonero: req.usuario.nombre, mesonero_id: cuenta.mesonero_id });
+  res.json(cuenta);
+});
+
+cuentasRouter.delete('/:id/solicitar-cobro', permitir(...R.servicio), async (req, res) => {
+  const id = idNum(req.params.id);
+  await query(`UPDATE cuentas SET cobro_solicitado_en = NULL, cobro_solicitado_por = NULL, cobro_nota = NULL WHERE id = $1 AND estado = 'abierta'`, [id]);
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cobro', accion: 'cancelado', cuenta_id: id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente,
+    mesonero: cuenta.mesonero, mesonero_id: cuenta.mesonero_id });
+  res.json(cuenta);
 });
 
 cuentasRouter.post('/:id/pagos', permitir(...R.cobro), async (req, res) => {
@@ -234,21 +303,33 @@ cuentasRouter.post('/:id/pagos', permitir(...R.cobro), async (req, res) => {
       cerrar: z.boolean().default(false),
     })
     .parse(req.body);
-  const resultado = await tx((db) => pagar(db, id, datos, req.usuario));
-  res.status(201).json({ ...resultado, cuenta: await detalleCuenta(id) });
+  const resultado = await tx(async (db) => {
+    const r = await pagar(db, id, datos, req.usuario);
+    // Atendida: sale de la cola de cobro
+    await query(`UPDATE cuentas SET cobro_solicitado_en = NULL, cobro_solicitado_por = NULL, cobro_nota = NULL WHERE id = $1`, [id], db);
+    return r;
+  });
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cobro', accion: 'cobrado', cuenta_id: id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente,
+    mesonero: cuenta.mesonero, mesonero_id: cuenta.mesonero_id });
+  res.status(201).json({ ...resultado, cuenta });
 });
 
 cuentasRouter.post('/:id/cerrar', permitir(...R.cobro), async (req, res) => {
   const id = idNum(req.params.id);
   await tx((db) => cerrar(db, id, req.usuario));
-  res.json(await detalleCuenta(id));
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cuenta', accion: 'cerrada', cuenta_id: id, mesonero_id: cuenta.mesonero_id });
+  res.json(cuenta);
 });
 
 cuentasRouter.post('/:id/anular', permitir('gerente', 'cajero'), async (req, res) => {
   const id = idNum(req.params.id);
   const { motivo } = z.object({ motivo: z.string().trim().min(3, 'Indica el motivo') }).parse(req.body);
   await tx((db) => anularCuenta(db, id, motivo, req.usuario));
-  res.json(await detalleCuenta(id));
+  const cuenta = await detalleCuenta(id);
+  emitir({ tipo: 'cuenta', accion: 'anulada', cuenta_id: id, mesonero_id: cuenta.mesonero_id });
+  res.json(cuenta);
 });
 
 // ====================================================================== Comandas (pantalla de cocina / barra)
@@ -259,12 +340,14 @@ comandasRouter.get('/', permitir(...R.comandas), async (req, res) => {
   res.json(
     await query(
       `SELECT i.id, i.cuenta_id, i.nombre, i.presentacion, i.cantidad, i.asiento, i.notas, i.estado, i.estacion, i.ronda, i.creado_en,
-              c.numero AS cuenta, c.tipo, c.nombre_cliente, m.numero AS mesa_numero, m.nombre AS mesa_nombre, u.nombre AS mesonero,
+              c.numero AS cuenta, c.tipo, c.nombre_cliente, c.asiento AS puesto, m.numero AS mesa_numero, m.nombre AS mesa_nombre,
+              m.tipo AS mesa_tipo, z.nombre AS zona, u.nombre AS mesonero,
               COALESCE((SELECT json_agg(json_build_object('tipo', x.tipo, 'nombre', x.nombre, 'cantidad', x.cantidad) ORDER BY x.tipo, x.id)
                           FROM cuenta_item_modificadores x WHERE x.item_id = i.id), '[]'::json) AS modificadores
          FROM cuenta_items i
          JOIN cuentas c ON c.id = i.cuenta_id
          LEFT JOIN mesas m ON m.id = c.mesa_id
+         LEFT JOIN zonas z ON z.id = m.zona_id
          LEFT JOIN usuarios u ON u.id = i.usuario_id
         WHERE i.estado IN ('pendiente','preparando','listo') AND c.estado = 'abierta'
           AND ($1::text IS NULL OR i.estacion = $1)
@@ -274,15 +357,31 @@ comandasRouter.get('/', permitir(...R.comandas), async (req, res) => {
   );
 });
 
+/** Cambia el estado y avisa en vivo (al mesonero le llega "listo para llevar a la mesa") */
+async function cambiarEstado(ids: number[], estado: 'pendiente' | 'preparando' | 'listo' | 'entregado') {
+  const items = await query(
+    `WITH act AS (
+       UPDATE cuenta_items SET estado = $2, listo_en = CASE WHEN $2 = 'listo' THEN now() ELSE listo_en END
+        WHERE id = ANY($1::bigint[]) AND estado <> 'anulado' RETURNING id, cuenta_id, nombre, cantidad, estacion)
+     SELECT a.id, a.nombre, a.cantidad, a.cuenta_id, a.estacion, c.tipo, c.asiento, c.nombre_cliente AS cliente, c.mesonero_id,
+            m.numero AS mesa_numero, m.tipo AS mesa_tipo
+       FROM act a JOIN cuentas c ON c.id = a.cuenta_id LEFT JOIN mesas m ON m.id = c.mesa_id`,
+    [ids, estado],
+  );
+  if (items.length)
+    emitir({
+      tipo: 'comanda', estado,
+      items: items.map((i) => ({ id: i.id, nombre: i.nombre, cantidad: i.cantidad, cuenta_id: i.cuenta_id, lugar: lugarDe(i), cliente: i.cliente,
+        mesonero_id: i.mesonero_id, estacion: i.estacion })),
+    });
+  return items.length;
+}
+
 comandasRouter.patch('/:itemId', permitir(...R.comandas), async (req, res) => {
   const { estado } = z.object({ estado: z.enum(['pendiente', 'preparando', 'listo', 'entregado']) }).parse(req.body);
-  const [i] = await query(
-    `UPDATE cuenta_items SET estado = $2, listo_en = CASE WHEN $2 = 'listo' THEN now() ELSE listo_en END
-      WHERE id = $1 AND estado <> 'anulado' RETURNING id, estado`,
-    [idNum(req.params.itemId), estado],
-  );
-  if (!i) throw notFound('Ítem');
-  res.json(i);
+  const n = await cambiarEstado([idNum(req.params.itemId)], estado);
+  if (!n) throw notFound('Ítem');
+  res.json({ ok: true, estado });
 });
 
 /** Marca de una vez todos los ítems de una ronda/cuenta en una estación */
@@ -290,12 +389,7 @@ comandasRouter.post('/lote', permitir(...R.comandas), async (req, res) => {
   const { ids, estado } = z
     .object({ ids: z.array(z.number().int()).min(1), estado: z.enum(['preparando', 'listo', 'entregado']) })
     .parse(req.body);
-  await query(
-    `UPDATE cuenta_items SET estado = $2, listo_en = CASE WHEN $2 = 'listo' THEN now() ELSE listo_en END
-      WHERE id = ANY($1::bigint[]) AND estado <> 'anulado'`,
-    [ids, estado],
-  );
-  res.json({ ok: true });
+  res.json({ ok: true, actualizados: await cambiarEstado(ids, estado) });
 });
 
 export type { Moneda };
