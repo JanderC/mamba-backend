@@ -496,4 +496,34 @@ CREATE TABLE IF NOT EXISTS aforo_registros (
   fecha      timestamptz NOT NULL DEFAULT now()
 );
 
+-- =====================================================================
+--  ÁREAS DE INVENTARIO: cocina · barra · general
+--  El inventario se invierte y se controla en tres bolsas separadas:
+--    cocina  → insumos de cocina
+--    barra   → licores, mixers y todo lo que se sirve en la barra
+--    general → bodega: cervezas y lo que se compra por caja
+--  Cada insumo pertenece a un área; la categoría solo sugiere el área al crearlo.
+-- =====================================================================
+ALTER TABLE categorias_insumo ADD COLUMN IF NOT EXISTS area text NOT NULL DEFAULT 'general';
+ALTER TABLE insumos           ADD COLUMN IF NOT EXISTS area text NOT NULL DEFAULT 'general';
+DO $$ BEGIN
+  ALTER TABLE categorias_insumo ADD CONSTRAINT ck_cat_insumo_area CHECK (area IN ('cocina','barra','general'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE insumos ADD CONSTRAINT ck_insumo_area CHECK (area IN ('cocina','barra','general'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS idx_insumos_area ON insumos (area, activo);
+
+-- Área por defecto de las categorías que ya existen (solo las que nadie ha cambiado)
+UPDATE categorias_insumo SET area = CASE
+         WHEN nombre ILIKE '%cocina%'                               THEN 'cocina'
+         WHEN nombre ILIKE '%licor%' OR nombre ILIKE '%mixer%'      THEN 'barra'
+         ELSE 'general' END
+ WHERE area = 'general';
+
+-- Los insumos heredan el área de su categoría la primera vez
+UPDATE insumos i SET area = c.area
+  FROM categorias_insumo c
+ WHERE c.id = i.categoria_insumo_id AND i.area = 'general' AND c.area <> 'general';
+
 COMMIT;

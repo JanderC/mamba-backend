@@ -1,35 +1,73 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { query, tx } from '../../db/pool.js';
+import { type Db, query, tx } from '../../db/pool.js';
 import { R, permitir } from '../../middlewares/auth.js';
 import { HttpError, notFound } from '../../utils/http.js';
 import { MONEDAS } from '../../utils/moneda.js';
 
 export const inventarioRouter = Router();
 
+/** Las tres bolsas en las que el dueño invierte y controla el inventario */
+export const AREAS = ['cocina', 'barra', 'general'] as const;
+
 inventarioRouter.get('/categorias', async (_req, res) => {
-  res.json(await query(`SELECT * FROM categorias_insumo ORDER BY nombre`));
+  res.json(await query(`SELECT * FROM categorias_insumo ORDER BY area, nombre`));
 });
 
 inventarioRouter.post('/categorias', permitir(...R.gestion), async (req, res) => {
-  const c = z.object({ nombre: z.string().trim().min(2), icono: z.string().nullish() }).parse(req.body);
+  const c = z.object({ nombre: z.string().trim().min(2), icono: z.string().nullish(), area: z.enum(AREAS).default('general') }).parse(req.body);
   const [n] = await query(
-    `INSERT INTO categorias_insumo (nombre, icono) VALUES ($1,$2) ON CONFLICT (nombre) DO UPDATE SET icono = EXCLUDED.icono RETURNING *`,
-    [c.nombre, c.icono ?? null],
+    `INSERT INTO categorias_insumo (nombre, icono, area) VALUES ($1,$2,$3)
+     ON CONFLICT (nombre) DO UPDATE SET icono = EXCLUDED.icono, area = EXCLUDED.area RETURNING *`,
+    [c.nombre, c.icono ?? null, c.area],
   );
   res.status(201).json(n);
 });
 
 // ====================================================================== Insumos
-inventarioRouter.get('/insumos', async (_req, res) => {
+inventarioRouter.get('/insumos', async (req, res) => {
+  const { area } = z.object({ area: z.enum(AREAS).optional() }).parse(req.query);
   res.json(
     await query(
       `SELECT i.*, c.nombre AS categoria, c.icono,
               (i.stock <= i.stock_minimo) AS bajo,
               round(i.stock * i.costo_unitario, 2) AS valor
          FROM insumos i LEFT JOIN categorias_insumo c ON c.id = i.categoria_insumo_id
+        WHERE ($1::text IS NULL OR i.area = $1)
         ORDER BY i.activo DESC, c.nombre, i.nombre`,
+      [area ?? null],
     ),
+  );
+});
+
+/**
+ * Lo que hay invertido en cada área, a costo. Es la foto que el dueño compara
+ * antes y después del fin de semana para saber cuánto se consumió y cuánto reponer.
+ */
+inventarioRouter.get('/resumen', async (_req, res) => {
+  const filas = await query(
+    `SELECT i.area, i.moneda_costo,
+            count(*)::int                                  AS insumos,
+            count(*) FILTER (WHERE i.stock <= i.stock_minimo)::int AS bajos,
+            count(*) FILTER (WHERE i.stock <= 0)::int       AS agotados,
+            round(SUM(i.stock * i.costo_unitario), 2)       AS valor
+       FROM insumos i
+      WHERE i.activo
+      GROUP BY i.area, i.moneda_costo
+      ORDER BY i.area`,
+  );
+  res.json(
+    AREAS.map((area) => {
+      const propias = filas.filter((f) => f.area === area);
+      return {
+        area,
+        insumos: propias.reduce((s, f) => s + f.insumos, 0),
+        bajos: propias.reduce((s, f) => s + f.bajos, 0),
+        agotados: propias.reduce((s, f) => s + f.agotados, 0),
+        /** Valor a costo por moneda: { COP: 16822322, USD: 0, VES: 0 } */
+        valor: Object.fromEntries(MONEDAS.map((m) => [m, Number(propias.find((f) => f.moneda_costo === m)?.valor ?? 0)])),
+      };
+    }),
   );
 });
 
@@ -37,6 +75,8 @@ const insumoSchema = z.object({
   codigo: z.string().trim().nullish(),
   nombre: z.string().trim().min(2),
   categoria_insumo_id: z.number().int().nullish(),
+  /** Si no viene, se hereda del área de la categoría */
+  area: z.enum(AREAS).optional(),
   unidad: z.enum(['und', 'ml', 'g']),
   presentacion_compra: z.string().nullish(),
   factor_compra: z.number().positive().default(1),
@@ -48,6 +88,14 @@ const insumoSchema = z.object({
   stock_inicial: z.number().min(0).optional(), // solo al crear
 });
 
+/** El área que se pidió, o la de su categoría, o 'general' */
+async function areaDe(i: z.infer<typeof insumoSchema>, db?: Db) {
+  if (i.area) return i.area;
+  if (!i.categoria_insumo_id) return 'general';
+  const [c] = await query<{ area: string }>(`SELECT area FROM categorias_insumo WHERE id = $1`, [i.categoria_insumo_id], db);
+  return c?.area ?? 'general';
+}
+
 inventarioRouter.post('/insumos', permitir(...R.gestion), async (req, res) => {
   const i = insumoSchema.parse(req.body);
   const id = await tx(async (db) => {
@@ -56,10 +104,10 @@ inventarioRouter.post('/insumos', permitir(...R.gestion), async (req, res) => {
     if (dup) throw new HttpError(409, 'Ya existe un insumo con ese código');
     const stock = i.stock_inicial ?? 0;
     const [n] = await query<{ id: number }>(
-      `INSERT INTO insumos (codigo, nombre, categoria_insumo_id, unidad, presentacion_compra, factor_compra, stock, stock_minimo,
+      `INSERT INTO insumos (codigo, nombre, categoria_insumo_id, area, unidad, presentacion_compra, factor_compra, stock, stock_minimo,
                             costo_unitario, moneda_costo, recargo_seleccion, activo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-      [codigo, i.nombre, i.categoria_insumo_id ?? null, i.unidad, i.presentacion_compra ?? null, i.factor_compra, stock, i.stock_minimo,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      [codigo, i.nombre, i.categoria_insumo_id ?? null, await areaDe(i, db), i.unidad, i.presentacion_compra ?? null, i.factor_compra, stock, i.stock_minimo,
        i.costo_unitario, i.moneda_costo, i.recargo_seleccion, i.activo], db,
     );
     if (stock > 0)
@@ -76,10 +124,10 @@ inventarioRouter.post('/insumos', permitir(...R.gestion), async (req, res) => {
 inventarioRouter.put('/insumos/:id', permitir(...R.gestion), async (req, res) => {
   const i = insumoSchema.parse(req.body);
   const [n] = await query(
-    `UPDATE insumos SET nombre=$2, categoria_insumo_id=$3, unidad=$4, presentacion_compra=$5, factor_compra=$6, stock_minimo=$7,
-            costo_unitario=$8, moneda_costo=$9, recargo_seleccion=$10, activo=$11, codigo = COALESCE(NULLIF($12,''), codigo)
+    `UPDATE insumos SET nombre=$2, categoria_insumo_id=$3, area=$4, unidad=$5, presentacion_compra=$6, factor_compra=$7, stock_minimo=$8,
+            costo_unitario=$9, moneda_costo=$10, recargo_seleccion=$11, activo=$12, codigo = COALESCE(NULLIF($13,''), codigo)
       WHERE id=$1 RETURNING id`,
-    [req.params.id, i.nombre, i.categoria_insumo_id ?? null, i.unidad, i.presentacion_compra ?? null, i.factor_compra, i.stock_minimo,
+    [req.params.id, i.nombre, i.categoria_insumo_id ?? null, await areaDe(i), i.unidad, i.presentacion_compra ?? null, i.factor_compra, i.stock_minimo,
      i.costo_unitario, i.moneda_costo, i.recargo_seleccion, i.activo, i.codigo ?? ''],
   );
   if (!n) throw notFound('Insumo');
