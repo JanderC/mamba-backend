@@ -163,6 +163,80 @@ salonRouter.put('/mesas/:id', permitir(...R.gestion), async (req, res) => {
   res.json(n);
 });
 
+/** Crea varias mesas de una vez («Mesa 1» … «Mesa 25»), acomodadas en cuadrícula en el plano. Salta los números que ya existen. */
+salonRouter.post('/mesas/lote', permitir(...R.gestion), async (req, res) => {
+  const b = z.object({
+    zona_id: z.number().int(),
+    desde: z.number().int().min(1).max(9999),
+    hasta: z.number().int().min(1).max(9999),
+    capacidad: z.number().int().min(1).max(60).default(4),
+    tipo: z.enum(['mesa', 'barra', 'vip']).default('mesa'),
+    forma: z.enum(['redonda', 'cuadrada', 'rectangular', 'barra']).default('cuadrada'),
+  }).refine((x) => x.hasta >= x.desde && x.hasta - x.desde < 200, 'El rango debe ir de menor a mayor y tener como máximo 200 mesas').parse(req.body);
+  const [zona] = await query(`SELECT 1 FROM zonas WHERE id = $1`, [b.zona_id]);
+  if (!zona) throw notFound('Zona');
+  const numeros = Array.from({ length: b.hasta - b.desde + 1 }, (_, i) => b.desde + i);
+  const creadas = await tx(async (db) => {
+    const existentes = new Set((await query<{ numero: number }>(`SELECT numero FROM mesas WHERE numero = ANY($1)`, [numeros], db)).map((m) => m.numero));
+    const nuevos = numeros.filter((n) => !existentes.has(n));
+    const cols = Math.max(1, Math.ceil(Math.sqrt(nuevos.length * 1.6)));
+    const filas = Math.max(1, Math.ceil(nuevos.length / cols));
+    const paso = (total: number, i: number) => (total === 1 ? 50 : 10 + (80 * i) / (total - 1));
+    for (const [i, n] of nuevos.entries()) {
+      await query(
+        `INSERT INTO mesas (zona_id, numero, nombre, tipo, forma, capacidad, pos_x, pos_y) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [b.zona_id, n, `Mesa ${n}`, b.tipo, b.forma, b.capacidad, paso(cols, i % cols).toFixed(2), paso(filas, Math.floor(i / cols)).toFixed(2)],
+        db,
+      );
+    }
+    return { creadas: nuevos.length, omitidas: [...existentes].sort((a, c) => a - c) };
+  });
+  res.status(201).json(creadas);
+});
+
+/**
+ * Elimina la mesa. No se puede con una cuenta abierta o un pedido QR pendiente.
+ * Las cuentas y reservas viejas se conservan (quedan sin mesa); su QR deja de funcionar.
+ */
+salonRouter.delete('/mesas/:id', permitir(...R.gestion), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) throw notFound('Mesa');
+  await tx(async (db) => {
+    const [m] = await query<{ numero: number; abiertas: number; pendientes: number }>(
+      `SELECT numero,
+              (SELECT count(*) FROM cuentas c WHERE c.mesa_id = m.id AND c.estado = 'abierta')::int AS abiertas,
+              (SELECT count(*) FROM pedidos_qr p WHERE p.mesa_id = m.id AND p.estado = 'pendiente')::int AS pendientes
+         FROM mesas m WHERE id = $1 FOR UPDATE`,
+      [id], db,
+    );
+    if (!m) throw notFound('Mesa');
+    if (m.abiertas) throw new HttpError(409, `La mesa ${m.numero} tiene una cuenta abierta: cóbrala o muévela antes de eliminarla`);
+    if (m.pendientes) throw new HttpError(409, `La mesa ${m.numero} tiene un pedido del QR pendiente: acéptalo o recházalo primero`);
+    await query(`UPDATE cuentas SET mesa_id = NULL WHERE mesa_id = $1`, [id], db);
+    await query(`UPDATE reservas SET mesa_id = NULL WHERE mesa_id = $1`, [id], db);
+    await query(`DELETE FROM pedidos_qr WHERE mesa_id = $1`, [id], db);
+    await query(`DELETE FROM mesas WHERE id = $1`, [id], db);
+  });
+  res.status(204).end();
+});
+
+/** Elimina la zona si ya no tiene mesas ni reservas (si tiene reservas, se puede desactivar) */
+salonRouter.delete('/zonas/:id', permitir(...R.gestion), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) throw notFound('Zona');
+  const [z_] = await query<{ nombre: string; mesas: number; reservas: number }>(
+    `SELECT nombre, (SELECT count(*) FROM mesas m WHERE m.zona_id = z.id)::int AS mesas,
+            (SELECT count(*) FROM reservas r WHERE r.zona_id = z.id)::int AS reservas
+       FROM zonas z WHERE id = $1`,
+    [id],
+  );
+  if (!z_) throw notFound('Zona');
+  if (z_.mesas) throw new HttpError(409, `«${z_.nombre}» todavía tiene ${z_.mesas} mesa(s): elimínalas o pásalas a otra zona primero`);
+  if (z_.reservas) throw new HttpError(409, `«${z_.nombre}» tiene ${z_.reservas} reserva(s) guardadas: desactívala en vez de eliminarla`);
+  await query(`DELETE FROM zonas WHERE id = $1`, [id]);
+  res.status(204).end();
+});
+
 /** Guarda el plano después de arrastrar las mesas */
 salonRouter.put('/plano', permitir(...R.gestion), async (req, res) => {
   const mesas = z.array(z.object({ id: z.number().int(), pos_x: z.number().min(0).max(100), pos_y: z.number().min(0).max(100) })).parse(req.body);
