@@ -1,7 +1,9 @@
 import cron from 'node-cron';
 import { env } from '../config/env.js';
 import { query } from '../db/pool.js';
+import { enviarWhatsApp } from './notificaciones.js';
 import { TZ, actualizarTasaBCV } from './sistema.js';
+import { whatsappConectado } from './whatsapp/conexion.js';
 
 export function mensajeRecordatorio(nombre: string, evento: { titulo: string; inicia_en: string | Date }, local: string) {
   const d = new Date(evento.inicia_en);
@@ -9,23 +11,13 @@ export function mensajeRecordatorio(nombre: string, evento: { titulo: string; in
   return `🐍 ¡Hola ${nombre.split(' ')[0]}! Te recordamos que *${evento.titulo}* es ${cuando} en ${local}. ¿Te guardamos mesa? Responde este mensaje y te reservamos.`;
 }
 
-async function enviarWhatsApp(destino: string, texto: string) {
-  const r = await fetch(`https://graph.facebook.com/v21.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', to: destino, type: 'text', text: { body: texto } }),
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!r.ok) throw new Error(`WhatsApp API ${r.status}: ${(await r.text()).slice(0, 200)}`);
-}
-
 /**
  * Envía los recordatorios de eventos que ya entraron en su ventana ("N horas antes").
- * Con WhatsApp Cloud API configurado se envían solos; sin él quedan en "pendiente" y el RRPP
+ * Con el WhatsApp vinculado (o WhatsApp Cloud API) se envían solos; sin él quedan en "pendiente" y el RRPP
  * los despacha con un clic desde Recordatorios (enlace wa.me con el mensaje armado).
  */
 export async function procesarRecordatoriosEvento() {
-  const automatico = Boolean(env.WHATSAPP_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID);
+  const automatico = whatsappConectado() || Boolean(env.WHATSAPP_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID);
   const pendientes = await query(
     `SELECT s.id, s.nombre, s.telefono, e.titulo, e.inicia_en
        FROM suscripciones_evento s JOIN eventos e ON e.id = s.evento_id

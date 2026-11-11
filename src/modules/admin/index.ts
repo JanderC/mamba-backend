@@ -11,6 +11,7 @@ import { reportesRouter } from './reportes.routes.js';
 import { salonRouter } from './salon.routes.js';
 import { conectarVivo } from '../../services/vivo.js';
 import { comandasRouter, cuentasRouter, posRouter } from './ventas.routes.js';
+import { whatsappRouter } from './whatsapp.routes.js';
 
 /**
  * Panel administrativo — todo bajo /api/admin
@@ -43,6 +44,7 @@ adminRouter.use('/reservas', reservasAdminRouter);
 adminRouter.use('/eventos', permitir(...R.comercial), eventosAdminRouter);
 adminRouter.use('/recordatorios', recordatoriosRouter);
 adminRouter.use('/clientes', clientesRouter);
+adminRouter.use('/whatsapp', whatsappRouter);
 
 // Administración
 adminRouter.use('/tasas', tasasRouter);

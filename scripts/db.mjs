@@ -43,6 +43,7 @@ try {
 
   await correr('03_sistema.sql');
   await correr('04_sistema_seed.sql');
+  await correr('05_whatsapp.sql');
 
   const { rows: [r] } = await client.query(`
     SELECT (SELECT count(*) FROM productos) AS productos, (SELECT count(*) FROM insumos) AS insumos,

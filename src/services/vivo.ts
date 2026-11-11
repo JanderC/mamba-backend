@@ -15,7 +15,11 @@ export type EventoVivo =
   /** Un mesonero pasó (o retiró) una cuenta a la cola de cobro */
   | { tipo: 'cobro'; accion: 'solicitado' | 'cancelado' | 'cobrado'; cuenta_id: number; numero: string; lugar: string; cliente: string | null; mesonero: string | null; mesonero_id: number | null }
   /** Cualquier otro cambio en una cuenta (abierta, pagada, anulada, ítem anulado…) */
-  | { tipo: 'cuenta'; accion: string; cuenta_id: number; mesonero_id?: number | null };
+  | { tipo: 'cuenta'; accion: string; cuenta_id: number; mesonero_id?: number | null }
+  /** WhatsApp vinculado: cambió la conexión, entró o salió un mensaje, o cambió su ✓ */
+  | { tipo: 'whatsapp'; accion: 'conexion'; estado: string }
+  | { tipo: 'whatsapp'; accion: 'mensaje'; jid: string; de_mi: boolean; texto: string; nuevo: boolean }
+  | { tipo: 'whatsapp'; accion: 'estado'; jid: string; wa_id: string; estado: string };
 
 const conexiones = new Set<Response>();
 

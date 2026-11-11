@@ -2,10 +2,12 @@ import { app } from './app.js';
 import { env } from './config/env.js';
 import { pool } from './db/pool.js';
 import { iniciarTareasProgramadas } from './services/recordatorios.js';
+import { autoIniciarWhatsapp } from './services/whatsapp/conexion.js';
 
 const server = app.listen(env.PORT, () => {
   console.log(`🐍 Mamba API escuchando en http://localhost:${env.PORT}/api`);
   iniciarTareasProgramadas();
+  void autoIniciarWhatsapp();
 });
 
 server.on('error', (err: NodeJS.ErrnoException) => {

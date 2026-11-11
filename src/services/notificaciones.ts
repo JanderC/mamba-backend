@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import { query } from '../db/pool.js';
+import { enviarTexto, whatsappConectado } from './whatsapp/conexion.js';
 import { MOTIVOS, formatCOP, formatFecha, formatHora } from '../utils/format.js';
 
 export type ReservaNotificable = {
@@ -41,8 +42,12 @@ export function mensajeReserva(r: ReservaNotificable) {
     .join('\n');
 }
 
-/** WhatsApp Cloud API (Meta). Solo se ejecuta si hay token configurado. */
-async function enviarWhatsApp(destino: string, texto: string) {
+/** Por el WhatsApp vinculado desde el panel; si no está conectado, por WhatsApp Cloud API (si hay token). */
+export async function enviarWhatsApp(destino: string, texto: string) {
+  if (whatsappConectado()) {
+    await enviarTexto(destino, texto);
+    return true;
+  }
   if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) return false;
   const r = await fetch(`https://graph.facebook.com/v21.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
