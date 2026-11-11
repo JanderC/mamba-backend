@@ -32,3 +32,6 @@ CREATE INDEX IF NOT EXISTS idx_pedidos_qr_mesa ON pedidos_qr (mesa_id, creado_en
 
 -- Interruptor general (Configuración): si está en false, el QR muestra la carta pero no deja pedir
 INSERT INTO ajustes (clave, valor) VALUES ('pedidos_qr_activo', 'true'::jsonb) ON CONFLICT (clave) DO NOTHING;
+
+-- «Más pedidos» del POS: suma lo vendido por producto en los últimos 30 días sin recorrer toda la tabla
+CREATE INDEX IF NOT EXISTS idx_items_producto_fecha ON cuenta_items (producto_id, creado_en);
