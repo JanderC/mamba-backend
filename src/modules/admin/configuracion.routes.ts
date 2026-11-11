@@ -22,6 +22,7 @@ const ajustesSchema = z
     permitir_venta_sin_stock: z.boolean(),
     recordatorio_reserva_horas: z.number().min(0).max(72),
     ticket_pie: z.string().max(300),
+    pedidos_qr_activo: z.boolean(),
   })
   .partial();
 

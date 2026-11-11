@@ -9,6 +9,7 @@ import { eventosRouter } from './modules/eventos/eventos.routes.js';
 import { galeriaRouter } from './modules/galeria/galeria.routes.js';
 import { localRouter } from './modules/local/local.routes.js';
 import { menuRouter } from './modules/menu/menu.routes.js';
+import { qrRouter } from './modules/qr/qr.routes.js';
 import { reservasRouter } from './modules/reservas/reservas.routes.js';
 
 export const app = express();
@@ -33,6 +34,7 @@ app.use('/api/menu', menuRouter);
 app.use('/api/eventos', eventosRouter);
 app.use('/api/reservas', reservasRouter);
 app.use('/api/galeria', galeriaRouter);
+app.use('/api/qr', qrRouter);
 app.use('/api/admin', adminRouter);
 
 app.use(notFoundHandler);

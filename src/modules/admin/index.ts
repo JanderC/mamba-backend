@@ -10,6 +10,7 @@ import { inventarioRouter } from './inventario.routes.js';
 import { reportesRouter } from './reportes.routes.js';
 import { salonRouter } from './salon.routes.js';
 import { conectarVivo } from '../../services/vivo.js';
+import { pedidosQrRouter } from '../qr/qr.routes.js';
 import { comandasRouter, cuentasRouter, posRouter } from './ventas.routes.js';
 import { whatsappRouter } from './whatsapp.routes.js';
 
@@ -32,6 +33,7 @@ adminRouter.use('/cuentas/:id/fiar', fiarCuenta);
 adminRouter.use('/cuentas', cuentasRouter);
 adminRouter.use('/creditos', creditosRouter);
 adminRouter.use('/comandas', comandasRouter);
+adminRouter.use('/pedidos-qr', pedidosQrRouter);
 adminRouter.use('/caja', cajaRouter);
 adminRouter.use('/cajas', cajasCrud);
 

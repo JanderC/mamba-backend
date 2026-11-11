@@ -1,6 +1,7 @@
 import { app } from './app.js';
 import { env } from './config/env.js';
 import { pool } from './db/pool.js';
+import { asegurarTablasQr } from './services/pedidosQr.js';
 import { iniciarTareasProgramadas } from './services/recordatorios.js';
 import { autoIniciarWhatsapp } from './services/whatsapp/conexion.js';
 
@@ -8,6 +9,8 @@ const server = app.listen(env.PORT, () => {
   console.log(`🐍 Mamba API escuchando en http://localhost:${env.PORT}/api`);
   iniciarTareasProgramadas();
   void autoIniciarWhatsapp();
+  // Códigos QR de las mesas y bandeja de pedidos del cliente (aditivo, idempotente)
+  asegurarTablasQr().catch((e) => console.error('[qr] no se pudieron preparar las tablas', (e as Error).message));
 });
 
 server.on('error', (err: NodeJS.ErrnoException) => {

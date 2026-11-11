@@ -51,6 +51,8 @@ export type Ajustes = {
   permitir_venta_sin_stock: boolean;
   recordatorio_reserva_horas: number;
   ticket_pie: string;
+  /** Los clientes pueden pedir desde el QR de la mesa */
+  pedidos_qr_activo: boolean;
 };
 
 const DEFECTO: Ajustes = {
@@ -61,6 +63,7 @@ const DEFECTO: Ajustes = {
   permitir_venta_sin_stock: false,
   recordatorio_reserva_horas: 3,
   ticket_pie: '',
+  pedidos_qr_activo: true,
 };
 
 export async function leerAjustes(db: Db = pool): Promise<Ajustes> {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { query, tx } from '../../db/pool.js';
+import { type Db, query, tx } from '../../db/pool.js';
 import { R, permitir } from '../../middlewares/auth.js';
 import { agregarItems, anularCuenta, anularItem, cerrar, detalleCuenta, itemSchema, pagar, pagoSchema, recalcular } from '../../services/cuentas.js';
 import { jornada, leerAjustes, tasaVigente } from '../../services/sistema.js';
@@ -17,6 +17,11 @@ export const posRouter = Router();
  * inventario para armar tobos surtidos.
  */
 posRouter.get('/catalogo', async (_req, res) => {
+  res.json(await armarCatalogo());
+});
+
+/** Lo usa el POS y también la carta del QR de mesa (que oculta el stock exacto) */
+export async function armarCatalogo() {
   const tasa = await tasaVigente();
   const [categorias, productos, variantes, receta, adicionales, seleccionables] = await Promise.all([
     query(`SELECT id, nombre, icono, tipo, estacion FROM categorias_menu WHERE activo ORDER BY orden`),
@@ -70,8 +75,8 @@ posRouter.get('/catalogo', async (_req, res) => {
       }))
       .filter((p) => p.variantes.length),
   }));
-  res.json({ tasa, categorias: out.filter((c) => c.productos.length) });
-});
+  return { tasa, categorias: out.filter((c) => c.productos.length) };
+}
 
 // ====================================================================== Cuentas
 export const cuentasRouter = Router();
@@ -82,7 +87,7 @@ const idNum = (v: string | string[]) => {
   return n;
 };
 
-const abrirSchema = z.object({
+export const abrirSchema = z.object({
   tipo: z.enum(['mesa', 'barra', 'llevar']),
   mesa_id: z.number().int().nullish(),
   asiento: z.number().int().min(1).max(60).nullish(),
@@ -96,8 +101,13 @@ const abrirSchema = z.object({
 });
 
 export async function abrirCuenta(datos: z.infer<typeof abrirSchema>, usuarioId: number) {
-  const ajustes = await leerAjustes();
-  return tx(async (db) => {
+  return tx((db) => abrirCuentaEn(db, datos, usuarioId));
+}
+
+/** Igual que abrirCuenta, pero dentro de una transacción ya abierta (p. ej. al aceptar un pedido del QR) */
+export async function abrirCuentaEn(db: Db, datos: z.infer<typeof abrirSchema>, usuarioId: number) {
+  const ajustes = await leerAjustes(db);
+  {
     let servicio = 0;
     if (datos.tipo === 'mesa') {
       if (!datos.mesa_id) throw new HttpError(400, 'Selecciona la mesa');
@@ -117,7 +127,7 @@ export async function abrirCuenta(datos: z.infer<typeof abrirSchema>, usuarioId:
     if (datos.reserva_id)
       await query(`UPDATE reservas SET estado = 'asistio', mesa_id = COALESCE($2, mesa_id) WHERE id = $1`, [datos.reserva_id, datos.mesa_id ?? null], db);
     return c.id;
-  });
+  }
 }
 
 cuentasRouter.post('/', permitir(...R.servicio), async (req, res) => {
