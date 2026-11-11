@@ -39,13 +39,14 @@ async function fromInstagram(): Promise<Media[] | null> {
 }
 
 galeriaRouter.get('/', async (_req, res) => {
-  const ig = await fromInstagram();
-  const media =
-    ig ??
-    (await query<Media>(
+  // Primero las fotos subidas desde el panel; después lo último de Instagram (si hay token)
+  const [subidas, ig] = await Promise.all([
+    query<Media>(
       `SELECT id::text, tipo, fuente, url, miniatura_url, descripcion, enlace, publicado_en
-         FROM galeria WHERE activo ORDER BY orden, publicado_en DESC LIMIT 30`,
-    ));
+         FROM galeria WHERE activo ORDER BY orden, publicado_en DESC LIMIT 60`,
+    ),
+    fromInstagram(),
+  ]);
   res.set('Cache-Control', 'public, max-age=300');
-  res.json(media);
+  res.json([...subidas, ...(ig ?? [])]);
 });
