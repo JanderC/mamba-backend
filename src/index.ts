@@ -1,6 +1,7 @@
 import { app } from './app.js';
 import { env } from './config/env.js';
 import { pool } from './db/pool.js';
+import { asegurarImpresion } from './services/impresion.js';
 import { asegurarTablasQr } from './services/pedidosQr.js';
 import { iniciarTareasProgramadas } from './services/recordatorios.js';
 import { autoIniciarWhatsapp } from './services/whatsapp/conexion.js';
@@ -10,6 +11,8 @@ const server = app.listen(env.PORT, () => {
   iniciarTareasProgramadas();
   void autoIniciarWhatsapp();
   // Códigos QR de las mesas y bandeja de pedidos del cliente (aditivo, idempotente)
+  // Marca de «ya impreso» para las comandas en papel
+  asegurarImpresion().catch((e) => console.error('[impresion] no se pudo preparar', (e as Error).message));
   asegurarTablasQr().catch((e) => console.error('[qr] no se pudieron preparar las tablas', (e as Error).message));
 });
 

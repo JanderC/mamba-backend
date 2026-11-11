@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { type Db, query, tx } from '../../db/pool.js';
 import { R, permitir } from '../../middlewares/auth.js';
 import { agregarItems, anularCuenta, anularItem, cerrar, detalleCuenta, itemSchema, pagar, pagoSchema, recalcular } from '../../services/cuentas.js';
+import { SELECT_COMANDA, liberarImpresion, reclamarParaImprimir } from '../../services/impresion.js';
 import { jornada, leerAjustes, tasaVigente } from '../../services/sistema.js';
 import { emitir, lugarDe } from '../../services/vivo.js';
 import { HttpError, notFound } from '../../utils/http.js';
@@ -353,16 +354,7 @@ comandasRouter.get('/', permitir(...R.comandas), async (req, res) => {
   const { estacion } = z.object({ estacion: z.enum(['barra', 'cocina']).optional() }).parse(req.query);
   res.json(
     await query(
-      `SELECT i.id, i.cuenta_id, i.nombre, i.presentacion, i.cantidad, i.asiento, i.notas, i.estado, i.estacion, i.ronda, i.creado_en,
-              c.numero AS cuenta, c.tipo, c.nombre_cliente, c.asiento AS puesto, m.numero AS mesa_numero, m.nombre AS mesa_nombre,
-              m.tipo AS mesa_tipo, z.nombre AS zona, u.nombre AS mesonero,
-              COALESCE((SELECT json_agg(json_build_object('tipo', x.tipo, 'nombre', x.nombre, 'cantidad', x.cantidad) ORDER BY x.tipo, x.id)
-                          FROM cuenta_item_modificadores x WHERE x.item_id = i.id), '[]'::json) AS modificadores
-         FROM cuenta_items i
-         JOIN cuentas c ON c.id = i.cuenta_id
-         LEFT JOIN mesas m ON m.id = c.mesa_id
-         LEFT JOIN zonas z ON z.id = m.zona_id
-         LEFT JOIN usuarios u ON u.id = i.usuario_id
+      `${SELECT_COMANDA}
         WHERE i.estado IN ('pendiente','preparando','listo') AND c.estado = 'abierta'
           AND ($1::text IS NULL OR i.estacion = $1)
         ORDER BY i.creado_en, i.id`,
@@ -390,6 +382,19 @@ async function cambiarEstado(ids: number[], estado: 'pendiente' | 'preparando' |
     });
   return items.length;
 }
+
+/** La pantalla que tiene la impresora pide lo nuevo por imprimir; queda marcado para que no salga dos veces */
+comandasRouter.post('/imprimir', permitir(...R.comandas), async (req, res) => {
+  const { estaciones } = z.object({ estaciones: z.array(z.enum(['barra', 'cocina'])).min(1).default(['cocina']) }).parse(req.body ?? {});
+  res.json(await reclamarParaImprimir(estaciones));
+});
+
+/** La impresora falló: esos ítems vuelven a la cola */
+comandasRouter.post('/imprimir/liberar', permitir(...R.comandas), async (req, res) => {
+  const { ids } = z.object({ ids: z.array(z.number().int()).min(1) }).parse(req.body);
+  await liberarImpresion(ids);
+  res.json({ ok: true });
+});
 
 comandasRouter.patch('/:itemId', permitir(...R.comandas), async (req, res) => {
   const { estado } = z.object({ estado: z.enum(['pendiente', 'preparando', 'listo', 'entregado']) }).parse(req.body);
