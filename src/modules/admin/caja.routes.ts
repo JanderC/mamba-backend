@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { type Db, pool, query, tx } from '../../db/pool.js';
 import { R, permitir } from '../../middlewares/auth.js';
-import { tasaVigente } from '../../services/sistema.js';
+import { JORNADA_HOY, TZ, jornada, leerAjustes, tasaVigente } from '../../services/sistema.js';
 import { HttpError, notFound } from '../../utils/http.js';
-import { MONEDAS, type Moneda, aUSD, redondear } from '../../utils/moneda.js';
+import { MONEDAS, type Moneda, aUSD, desdeUSD, redondear, redondearMoneda } from '../../utils/moneda.js';
 
 export const cajaRouter = Router();
 // Ver qué caja está abierta: también el mesonero (para cobrar en la mesa). Todo lo demás, solo quien maneja caja.
@@ -180,4 +180,98 @@ cajaRouter.post('/sesiones/:id/cerrar', async (req, res) => {
     );
   });
   res.json(await calcularResumen(id));
+});
+
+/**
+ * Movimientos del día (una jornada: de 6 a. m. a 6 a. m.): lo que se ha vendido y cobrado, por moneda y método,
+ * los ingresos y egresos de caja, lo que falta por cobrar y el detalle de cada cobro. Es lo que mira el
+ * administrador para saber cómo va la noche.
+ */
+cajaRouter.get('/diario', async (req, res) => {
+  const { fecha } = z.object({ fecha: z.iso.date().optional() }).parse(req.query);
+  const F = fecha ? '$1::date' : JORNADA_HOY;
+  const p = fecha ? [fecha] : [];
+  const [ajustes, tasa] = await Promise.all([leerAjustes(), tasaVigente()]);
+  const principal = ajustes.moneda_principal;
+  const enPrincipal = (usd: number) => redondearMoneda(desdeUSD(Number(usd), principal, tasa), principal);
+
+  const [[dia], pagos, movimientos, vendido, [cuentas], porHora, sesiones] = await Promise.all([
+    query(`SELECT ${F} AS fecha, (${F} = ${JORNADA_HOY}) AS es_hoy`, p),
+    query(
+      `SELECT p.id, p.fecha, p.moneda, p.monto, p.monto_recibido, p.monto_usd, p.vuelto_monto, p.vuelto_moneda, p.referencia, p.anulado,
+              m.nombre AS metodo, m.es_efectivo, c.id AS cuenta_id, c.numero, c.tipo, c.nombre_cliente,
+              me.numero AS mesa_numero, me.nombre AS mesa_nombre, u.nombre AS usuario
+         FROM pagos p JOIN metodos_pago m ON m.id = p.metodo_pago_id JOIN cuentas c ON c.id = p.cuenta_id
+         LEFT JOIN mesas me ON me.id = c.mesa_id LEFT JOIN usuarios u ON u.id = p.usuario_id
+        WHERE ${jornada('p.fecha')} = ${F} ORDER BY p.fecha DESC, p.id DESC`, p),
+    query(
+      `SELECT mc.id, mc.fecha, mc.tipo, mc.concepto, mc.moneda, mc.monto, mc.monto_usd, u.nombre AS usuario
+         FROM movimientos_caja mc LEFT JOIN usuarios u ON u.id = mc.usuario_id
+        WHERE ${jornada('mc.fecha')} = ${F} ORDER BY mc.fecha DESC`, p),
+    query(
+      `SELECT i.nombre, i.presentacion, i.estacion, SUM(i.cantidad)::float AS cantidad, SUM(i.precio_unitario_usd * i.cantidad)::float AS usd
+         FROM cuenta_items i JOIN cuentas c ON c.id = i.cuenta_id
+        WHERE i.estado <> 'anulado' AND c.estado <> 'anulada' AND ${jornada('i.creado_en')} = ${F}
+        GROUP BY i.nombre, i.presentacion, i.estacion ORDER BY SUM(i.cantidad) DESC, i.nombre`, p),
+    query(
+      `SELECT count(*) FILTER (WHERE c.estado = 'pagada' AND ${jornada('c.cerrada_en')} = ${F})::int AS cobradas,
+              count(*) FILTER (WHERE c.estado = 'anulada' AND ${jornada('c.cerrada_en')} = ${F})::int AS anuladas,
+              count(*) FILTER (WHERE c.estado = 'fiada' AND ${jornada('c.cerrada_en')} = ${F})::int AS fiadas,
+              count(*) FILTER (WHERE c.estado = 'abierta')::int AS abiertas,
+              COALESCE(SUM(CASE WHEN c.estado = 'abierta' AND c.total > 0 THEN (c.total - c.pagado) / c.total * c.total_usd END), 0)::float AS por_cobrar_usd
+         FROM cuentas c`, p),
+    query(
+      `SELECT to_char(date_trunc('hour', p.fecha AT TIME ZONE '${TZ}'), 'HH24') AS hora, SUM(p.monto_usd)::float AS usd
+         FROM pagos p WHERE NOT p.anulado AND ${jornada('p.fecha')} = ${F}
+        GROUP BY 1 ORDER BY min(p.fecha)`, p),
+    query(
+      `SELECT s.id FROM sesiones_caja s
+        WHERE ${jornada('s.fecha_apertura')} = ${F} OR (s.estado = 'abierta' AND ${F} = ${JORNADA_HOY}) ORDER BY s.id`, p),
+  ]);
+
+  // Cobrado por moneda: efectivo y demás métodos por separado (lo que de verdad entró en cada moneda)
+  const validos = pagos.filter((x) => !x.anulado);
+  const porMoneda = Object.fromEntries(MONEDAS.map((m) => [m, { efectivo: 0, otros: 0, total: 0, pagos: 0, vueltos: 0 }])) as Record<Moneda, { efectivo: number; otros: number; total: number; pagos: number; vueltos: number }>;
+  const porMetodo = new Map<string, { metodo: string; moneda: Moneda; es_efectivo: boolean; total: number; pagos: number }>();
+  for (const x of validos) {
+    const m = porMoneda[x.moneda as Moneda];
+    m[x.es_efectivo ? 'efectivo' : 'otros'] += Number(x.monto);
+    m.total += Number(x.monto);
+    m.pagos++;
+    if (x.vuelto_monto) porMoneda[x.vuelto_moneda as Moneda].vueltos += Number(x.vuelto_monto);
+    const k = `${x.metodo}|${x.moneda}`;
+    const e = porMetodo.get(k) ?? { metodo: x.metodo, moneda: x.moneda, es_efectivo: x.es_efectivo, total: 0, pagos: 0 };
+    e.total += Number(x.monto); e.pagos++;
+    porMetodo.set(k, e);
+  }
+  const mov = Object.fromEntries(MONEDAS.map((m) => [m, { ingresos: 0, egresos: 0 }])) as Record<Moneda, { ingresos: number; egresos: number }>;
+  for (const x of movimientos) mov[x.moneda as Moneda][x.tipo === 'ingreso' ? 'ingresos' : 'egresos'] += Number(x.monto);
+
+  const cobradoUsd = validos.reduce((t, x) => t + Number(x.monto_usd), 0);
+  const cuentasCobradas = new Set(validos.map((x) => x.cuenta_id)).size;
+  const vendidoUsd = vendido.reduce((t, x) => t + Number(x.usd), 0);
+
+  res.json({
+    fecha: dia.fecha, es_hoy: dia.es_hoy, moneda: principal, tasa,
+    totales: {
+      cobrado: enPrincipal(cobradoUsd), cobrado_usd: redondear(cobradoUsd, 2),
+      vendido: enPrincipal(vendidoUsd), vendido_usd: redondear(vendidoUsd, 2),
+      por_cobrar: dia.es_hoy ? enPrincipal(cuentas.por_cobrar_usd) : 0, cuentas_abiertas: dia.es_hoy ? cuentas.abiertas : 0,
+      cuentas_cobradas: cuentasCobradas, anuladas: cuentas.anuladas, fiadas: cuentas.fiadas,
+      ticket_promedio: cuentasCobradas ? enPrincipal(cobradoUsd / cuentasCobradas) : 0,
+      unidades: vendido.reduce((t, x) => t + Number(x.cantidad), 0),
+    },
+    por_moneda: porMoneda,
+    por_metodo: [...porMetodo.values()].sort((a, b) => b.total - a.total),
+    movimientos_totales: mov,
+    por_hora: porHora.map((h) => ({ hora: h.hora, total: enPrincipal(h.usd) })),
+    vendido: vendido.map((v) => ({ ...v, total: enPrincipal(v.usd) })),
+    pagos,
+    movimientos,
+    sesiones: await Promise.all(sesiones.map(async (s) => {
+      const r = await calcularResumen(s.id);
+      return { id: s.id, caja: r.sesion.caja, estado: r.sesion.estado, usuario: r.sesion.usuario, fecha_apertura: r.sesion.fecha_apertura,
+        fecha_cierre: r.sesion.fecha_cierre, esperado: r.esperado, total_usd: r.total_usd };
+    })),
+  });
 });
