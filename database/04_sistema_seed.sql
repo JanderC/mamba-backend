@@ -54,9 +54,9 @@ INSERT INTO metodos_pago (nombre, es_efectivo, monedas, requiere_referencia, ord
   ('Binance / USDT',           false, '{USD}',         true,  7)
 ON CONFLICT (nombre) DO NOTHING;
 
+-- Una sola caja: ahí entra todo lo que se cobra (barra, mesas y meseros)
 INSERT INTO cajas (nombre, descripcion) VALUES
-  ('Caja Principal', 'Cobro de mesas, terraza y zonas VIP'),
-  ('Caja Barra',     'Los clientes de barra van cancelando aquí')
+  ('Caja Principal', 'La caja del local: aquí entra todo lo que se cobra')
 ON CONFLICT (nombre) DO NOTHING;
 
 -- ---------------------------------------------------------------------

@@ -17,10 +17,10 @@ SELECT v.* FROM (VALUES
 WHERE NOT EXISTS (SELECT 1 FROM metodos_pago)
 ON CONFLICT (nombre) DO NOTHING;
 
+-- Una sola caja para todo el local
 INSERT INTO cajas (nombre, descripcion)
 SELECT v.* FROM (VALUES
-  ('Caja Barra',     'Los clientes de barra van cancelando aquí'),
-  ('Caja Principal', 'Cobro de mesas, terraza y zonas VIP')
+  ('Caja Principal', 'La caja del local: aquí entra todo lo que se cobra')
 ) AS v(nombre, descripcion)
 WHERE NOT EXISTS (SELECT 1 FROM cajas)
 ON CONFLICT (nombre) DO NOTHING;
