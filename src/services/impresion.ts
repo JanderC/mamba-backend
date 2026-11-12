@@ -42,6 +42,7 @@ export async function reclamarParaImprimir(estaciones: string[]) {
        FROM cuentas c
       WHERE c.id = i.cuenta_id AND c.estado = 'abierta'
         AND i.impreso_en IS NULL AND i.estado IN ('pendiente', 'preparando')
+        AND i.en_barra_desde IS NULL  -- lo que espera en la barra se imprime cuando la barra lo envía
         AND i.estacion = ANY($1::text[])
         AND i.creado_en > now() - interval '3 hours'
       RETURNING i.id`,

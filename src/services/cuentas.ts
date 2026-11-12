@@ -109,6 +109,8 @@ export async function agregarItems(db: Db, cuentaId: number, items: ItemInput[],
   const moneda = cuenta.moneda as Moneda;
   const [tasa, ajustes] = [await tasaVigente(db), await leerAjustes(db)];
   const [{ ronda }] = await query<{ ronda: number }>(`SELECT COALESCE(MAX(ronda), 0) + 1 AS ronda FROM cuenta_items WHERE cuenta_id = $1`, [cuentaId], db);
+  // Lo de cocina que manda el mesonero espera en la barra: la barra lo revisa y lo envía (ahí se imprime la comanda)
+  const retenerCocina = !directo && usuario.rol === 'mesonero' && ajustes.cocina_pasa_por_barra;
 
   for (const it of items) {
     const [v] = await query(
@@ -174,10 +176,11 @@ export async function agregarItems(db: Db, cuentaId: number, items: ItemInput[],
     const subtotal = redondearMoneda((precioBase + extras) * it.cantidad, moneda);
     const [item] = await query<{ id: number }>(
       `INSERT INTO cuenta_items (cuenta_id, producto_id, precio_producto_id, nombre, presentacion, estacion, cantidad, precio_base, extras,
-                                 subtotal, precio_unitario_usd, asiento, notas, estado, ronda, usuario_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+                                 subtotal, precio_unitario_usd, asiento, notas, estado, ronda, usuario_id, en_barra_desde)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
       [cuentaId, v.producto_id, v.id, v.nombre, v.presentacion, v.estacion, it.cantidad, precioBase, extras, subtotal,
-       aUSD(precioBase + extras, moneda, tasa), it.asiento ?? null, it.notas || null, directo ? 'entregado' : 'pendiente', ronda, usuario.id],
+       aUSD(precioBase + extras, moneda, tasa), it.asiento ?? null, it.notas || null, directo ? 'entregado' : 'pendiente', ronda, usuario.id,
+       retenerCocina && v.estacion === 'cocina' ? new Date() : null],
       db,
     );
     for (const m of mods)

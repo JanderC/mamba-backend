@@ -257,9 +257,13 @@ cuentasRouter.post('/:id/items', permitir(...R.servicio), async (req, res) => {
   // Aviso inmediato a barra y cocina: llega con la mesa, el cliente y quién lo tomó
   const ronda = Math.max(...cuenta.items.map((i: { ronda: number }) => i.ronda));
   const nuevos = cuenta.items.filter((i: { ronda: number }) => i.ronda === ronda);
+  // Lo que quedó esperando en la barra no avisa a cocina todavía
+  const [{ n: porEnviar }] = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM cuenta_items WHERE cuenta_id = $1 AND ronda = $2 AND en_barra_desde IS NOT NULL`, [id, ronda]);
+  const yaSalen = nuevos.filter((i: { estacion: string }) => !(porEnviar && i.estacion === 'cocina'));
   emitir({
     tipo: 'pedido', cuenta_id: id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente, mesonero: req.usuario.nombre,
-    estaciones: [...new Set(nuevos.map((i: { estacion: string }) => i.estacion))] as string[], items: nuevos.length, directo,
+    estaciones: [...new Set(yaSalen.map((i: { estacion: string }) => i.estacion))] as string[], items: nuevos.length, directo, por_enviar: porEnviar,
   });
   res.status(201).json(cuenta);
 });
@@ -357,6 +361,7 @@ comandasRouter.get('/', permitir(...R.comandas), async (req, res) => {
     await query(
       `${SELECT_COMANDA}
         WHERE i.estado IN ('pendiente','preparando','listo') AND c.estado = 'abierta'
+          AND i.en_barra_desde IS NULL
           AND ($1::text IS NULL OR i.estacion = $1)
         ORDER BY i.creado_en, i.id`,
       [estacion ?? null],
@@ -383,6 +388,34 @@ async function cambiarEstado(ids: number[], estado: 'pendiente' | 'preparando' |
     });
   return items.length;
 }
+
+/** Lo de cocina que mandaron los mesoneros y espera que la barra lo envíe */
+comandasRouter.get('/por-enviar', permitir(...R.cobro), async (_req, res) => {
+  res.json(await query(
+    `${SELECT_COMANDA}
+      WHERE i.en_barra_desde IS NOT NULL AND i.estado = 'pendiente' AND c.estado = 'abierta'
+      ORDER BY i.en_barra_desde, i.id`,
+  ));
+});
+
+/** La barra envía a cocina: aparece en la pantalla de cocina y la impresora saca la comanda */
+comandasRouter.post('/enviar-cocina', permitir(...R.cobro), async (req, res) => {
+  const { ids } = z.object({ ids: z.array(z.number().int()).min(1) }).parse(req.body);
+  const enviados = await query<{ cuenta_id: number; n: number }>(
+    `WITH act AS (
+       UPDATE cuenta_items SET en_barra_desde = NULL, creado_en = now()
+        WHERE id = ANY($1::bigint[]) AND en_barra_desde IS NOT NULL AND estado = 'pendiente' RETURNING cuenta_id)
+     SELECT cuenta_id, count(*)::int AS n FROM act GROUP BY cuenta_id`,
+    [ids],
+  );
+  for (const e of enviados) {
+    const cuenta = await detalleCuenta(e.cuenta_id);
+    // Igual que un pedido nuevo: cocina suena y la pantalla con impresora lo imprime
+    emitir({ tipo: 'pedido', cuenta_id: e.cuenta_id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente,
+      mesonero: cuenta.mesonero ?? req.usuario.nombre, estaciones: ['cocina'], items: e.n, directo: false, por_enviar: 0 });
+  }
+  res.json({ ok: true, enviados: enviados.reduce((s, e) => s + e.n, 0) });
+});
 
 /** La pantalla que tiene la impresora pide lo nuevo por imprimir; queda marcado para que no salga dos veces */
 comandasRouter.post('/imprimir', permitir(...R.comandas), async (req, res) => {

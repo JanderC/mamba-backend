@@ -53,6 +53,8 @@ export type Ajustes = {
   ticket_pie: string;
   /** Los clientes pueden pedir desde el QR de la mesa */
   pedidos_qr_activo: boolean;
+  /** Lo de cocina que pide el mesonero espera en la barra hasta que la barra lo envía (y ahí se imprime) */
+  cocina_pasa_por_barra: boolean;
 };
 
 const DEFECTO: Ajustes = {
@@ -64,6 +66,7 @@ const DEFECTO: Ajustes = {
   recordatorio_reserva_horas: 3,
   ticket_pie: '',
   pedidos_qr_activo: true,
+  cocina_pasa_por_barra: true,
 };
 
 export async function leerAjustes(db: Db = pool): Promise<Ajustes> {

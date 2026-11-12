@@ -23,6 +23,7 @@ const ajustesSchema = z
     recordatorio_reserva_horas: z.number().min(0).max(72),
     ticket_pie: z.string().max(300),
     pedidos_qr_activo: z.boolean(),
+    cocina_pasa_por_barra: z.boolean(),
   })
   .partial();
 

@@ -9,7 +9,7 @@ import type { Request, Response } from 'express';
  */
 export type EventoVivo =
   /** Un mesonero envió una ronda a preparación */
-  | { tipo: 'pedido'; cuenta_id: number; numero: string; lugar: string; cliente: string | null; mesonero: string; estaciones: string[]; items: number; directo: boolean }
+  | { tipo: 'pedido'; cuenta_id: number; numero: string; lugar: string; cliente: string | null; mesonero: string; estaciones: string[]; items: number; directo: boolean; por_enviar?: number }
   /** Barra o cocina cambió el estado de uno o varios ítems */
   | { tipo: 'comanda'; estado: string; items: { id: number; nombre: string; cantidad: number; cuenta_id: number; lugar: string; cliente: string | null; mesonero_id: number | null; estacion: string }[] }
   /** Un mesonero pasó (o retiró) una cuenta a la cola de cobro */
