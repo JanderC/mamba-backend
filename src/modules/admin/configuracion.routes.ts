@@ -189,3 +189,18 @@ cajasCrud.post('/', permitir(...R.gestion), async (req, res) => {
   );
   res.status(201).json(n);
 });
+
+/** Renombrar una caja («Caja Principal», «Caja Secundaria»…) o retirarla si ya no se usa */
+cajasCrud.put('/:id', permitir(...R.gestion), async (req, res) => {
+  const id = Number(req.params.id);
+  const c = z.object({ nombre: z.string().trim().min(2, 'Escribe el nombre').max(40), activo: z.boolean().optional() }).parse(req.body);
+  if (c.activo === false) {
+    const [abierta] = await query(`SELECT 1 FROM sesiones_caja WHERE caja_id = $1 AND estado = 'abierta'`, [id]);
+    if (abierta) throw new HttpError(409, 'Esa caja tiene el turno abierto: ciérrala antes de retirarla');
+  }
+  const [dup] = await query(`SELECT 1 FROM cajas WHERE lower(nombre) = lower($1) AND id <> $2`, [c.nombre, id]);
+  if (dup) throw new HttpError(409, `Ya existe una caja llamada «${c.nombre}»`);
+  const [n] = await query(`UPDATE cajas SET nombre = $2, activo = COALESCE($3, activo) WHERE id = $1 RETURNING *`, [id, c.nombre, c.activo ?? null]);
+  if (!n) throw notFound('Caja');
+  res.json(n);
+});
