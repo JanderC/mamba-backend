@@ -239,13 +239,28 @@ export async function anularItem(db: Db, cuentaId: number, itemId: number, motiv
 }
 
 export async function anularCuenta(db: Db, cuentaId: number, motivo: string, usuario: UsuarioToken) {
-  const cuenta = await cuentaAbierta(db, cuentaId);
-  if (Number(cuenta.pagado) > 0) throw new HttpError(409, 'La cuenta ya tiene pagos registrados: no se puede anular');
+  const [cuenta] = await query(`SELECT * FROM cuentas WHERE id = $1 FOR UPDATE`, [cuentaId], db);
+  if (!cuenta) throw notFound('Cuenta');
+  // El administrador y el gerente pueden anular también una venta ya cobrada (errores, ventas de prueba):
+  // sus pagos se anulan y salen del cuadre de caja. El cajero solo anula cuentas abiertas sin pagos.
+  const gerencia = usuario.rol === 'admin' || usuario.rol === 'gerente';
+  if (cuenta.estado === 'anulada') throw new HttpError(409, `La cuenta ${cuenta.numero} ya está anulada`);
+  if (cuenta.estado === 'fiada') throw new HttpError(409, `La cuenta ${cuenta.numero} está fiada: resuélvela desde «Por cobrar»`);
+  if (cuenta.estado !== 'abierta' && !gerencia) throw new HttpError(409, `La cuenta ${cuenta.numero} ya está ${cuenta.estado}`);
+  if (Number(cuenta.pagado) > 0) {
+    if (!gerencia) throw new HttpError(409, 'La cuenta ya tiene pagos registrados: solo el administrador o el gerente pueden anularla');
+    const [{ cerradas }] = await query<{ cerradas: number }>(
+      `SELECT count(*)::int AS cerradas FROM pagos p JOIN sesiones_caja s ON s.id = p.sesion_caja_id
+        WHERE p.cuenta_id = $1 AND NOT p.anulado AND s.estado <> 'abierta'`, [cuentaId], db);
+    if (cerradas) throw new HttpError(409, 'Esta venta se cobró en un turno de caja que ya se cerró: no se puede anular porque cambiaría un cuadre ya hecho');
+    await query(`UPDATE pagos SET anulado = true WHERE cuenta_id = $1 AND NOT anulado`, [cuentaId], db);
+  }
   const items = await query<{ id: number }>(`SELECT id FROM cuenta_items WHERE cuenta_id = $1 AND estado <> 'anulado'`, [cuentaId], db);
   for (const i of items) await devolverStock(db, i.id, usuario.id, `Cuenta ${cuenta.numero} anulada`);
   await query(`UPDATE cuenta_items SET estado = 'anulado', anulado_motivo = $2 WHERE cuenta_id = $1 AND estado <> 'anulado'`, [cuentaId, motivo], db);
   await query(
-    `UPDATE cuentas SET estado = 'anulada', anulada_motivo = $2, cerrada_en = now(), usuario_cierre_id = $3 WHERE id = $1`,
+    `UPDATE cuentas SET estado = 'anulada', anulada_motivo = $2, cerrada_en = now(), usuario_cierre_id = $3,
+            cobro_solicitado_en = NULL WHERE id = $1`,
     [cuentaId, motivo, usuario.id], db,
   );
   await recalcular(db, cuentaId);
