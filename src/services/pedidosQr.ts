@@ -173,9 +173,15 @@ export async function crearPedidoQr(token: string, datos: z.infer<typeof pedidoQ
 export async function estadoPedidosQr(token: string, ids: number[]) {
   const mesa = await mesaPorToken(token);
   if (!ids.length) return [];
+  // Cada producto con su estado en cocina/barra (si ya fue aceptado): confirmado → preparando → listo → entregado
   return query(
-    `SELECT id, estado, motivo, resumen, total_estimado AS total, moneda, creado_en, atendido_en
-       FROM pedidos_qr WHERE mesa_id = $1 AND id = ANY($2::bigint[]) ORDER BY id DESC`,
+    `SELECT p.id, p.estado, p.motivo, p.resumen, p.total_estimado AS total, p.moneda, p.creado_en, p.atendido_en,
+            COALESCE((SELECT json_agg(json_build_object('nombre', i.nombre, 'presentacion', i.presentacion, 'cantidad', i.cantidad,
+                                                        'estado', CASE WHEN i.en_barra_desde IS NOT NULL THEN 'pendiente' ELSE i.estado END,
+                                                        'estacion', i.estacion) ORDER BY i.id)
+                        FROM cuenta_items i
+                       WHERE p.estado = 'aceptado' AND i.cuenta_id = p.cuenta_id AND i.ronda = p.ronda AND i.estado <> 'anulado'), '[]'::json) AS items
+       FROM pedidos_qr p WHERE p.mesa_id = $1 AND p.id = ANY($2::bigint[]) ORDER BY p.id DESC`,
     [mesa.id, ids.slice(0, 20)],
   );
 }
@@ -225,7 +231,9 @@ export async function aceptarPedidoQr(id: number, usuario: UsuarioToken, cuentaE
     }
     const items = (pedido.items as z.infer<typeof itemSchema>[]).map((i) => ({ ...i, notas: [i.notas, pedido.nota].filter(Boolean).join(' · ') || null }));
     await agregarItems(db, cuentaId!, items, usuario, false);
-    await query(`UPDATE pedidos_qr SET estado = 'aceptado', cuenta_id = $2, atendido_en = now(), atendido_por = $3 WHERE id = $1`, [id, cuentaId, usuario.id], db);
+    // La ronda con la que entró a la cuenta: el cliente sigue esos productos desde su teléfono
+    const [{ ronda }] = await query<{ ronda: number }>(`SELECT MAX(ronda) AS ronda FROM cuenta_items WHERE cuenta_id = $1`, [cuentaId], db);
+    await query(`UPDATE pedidos_qr SET estado = 'aceptado', cuenta_id = $2, atendido_en = now(), atendido_por = $3, ronda = $4 WHERE id = $1`, [id, cuentaId, usuario.id, ronda], db);
     return { cuentaId: cuentaId!, pedido, mesa };
   });
 
