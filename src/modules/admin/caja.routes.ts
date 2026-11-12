@@ -7,7 +7,9 @@ import { HttpError, notFound } from '../../utils/http.js';
 import { MONEDAS, type Moneda, aUSD, redondear } from '../../utils/moneda.js';
 
 export const cajaRouter = Router();
-cajaRouter.use(permitir(...R.cobro));
+// Ver qué caja está abierta: también el mesonero (para cobrar en la mesa). Todo lo demás, solo quien maneja caja.
+cajaRouter.use((req, res, next) =>
+  req.method === 'GET' && req.path === '/' ? permitir(...R.cobro, 'mesonero')(req, res, next) : permitir(...R.cobro)(req, res, next));
 
 const porMoneda = () => ({ USD: 0, COP: 0, VES: 0 }) as Record<Moneda, number>;
 

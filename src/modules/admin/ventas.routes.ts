@@ -307,7 +307,8 @@ cuentasRouter.delete('/:id/solicitar-cobro', permitir(...R.servicio), async (req
   res.json(cuenta);
 });
 
-cuentasRouter.post('/:id/pagos', permitir(...R.cobro), async (req, res) => {
+// El mesonero también cobra en la mesa: el dinero entra a la caja abierta que elija
+cuentasRouter.post('/:id/pagos', permitir(...R.cobro, 'mesonero'), async (req, res) => {
   const id = idNum(req.params.id);
   const datos = z
     .object({
@@ -330,7 +331,7 @@ cuentasRouter.post('/:id/pagos', permitir(...R.cobro), async (req, res) => {
   res.status(201).json({ ...resultado, cuenta });
 });
 
-cuentasRouter.post('/:id/cerrar', permitir(...R.cobro), async (req, res) => {
+cuentasRouter.post('/:id/cerrar', permitir(...R.cobro, 'mesonero'), async (req, res) => {
   const id = idNum(req.params.id);
   await tx((db) => cerrar(db, id, req.usuario));
   const cuenta = await detalleCuenta(id);
