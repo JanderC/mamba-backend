@@ -166,6 +166,20 @@ export async function crearPedidoQr(token: string, datos: z.infer<typeof pedidoQ
 
   emitir({ tipo: 'pedido_qr', accion: 'nuevo', id: p.id, mesa_id: mesa.id, lugar: lugarMesa(mesa), cliente: datos.nombre_cliente || null,
     items: lineas.reduce((s, l) => s + l.cantidad, 0), total, moneda });
+
+  // Aceptación automática (ajuste): sale directo a cocina/barra. Si no se puede (p. ej. la mesa tiene varias
+  // cuentas abiertas y hay que elegir), queda pendiente para que la barra lo acepte a mano.
+  if (ajustes.qr_auto_aceptar) {
+    try {
+      const [actor] = await query<{ id: number }>(`SELECT id FROM usuarios WHERE activo AND rol IN ('admin','gerente') ORDER BY (rol = 'admin') DESC, id LIMIT 1`);
+      if (actor) {
+        await aceptarPedidoQr(p.id, { id: actor.id, nombre: 'QR automático', rol: 'barra' }, null);
+        return { id: p.id, estado: 'aceptado', creado_en: p.creado_en, resumen: lineas, total, moneda };
+      }
+    } catch (e) {
+      console.warn('[qr] no se pudo aceptar solo, queda pendiente:', (e as Error).message);
+    }
+  }
   return { id: p.id, estado: 'pendiente', creado_en: p.creado_en, resumen: lineas, total, moneda };
 }
 
@@ -268,4 +282,26 @@ export async function regenerarQr(mesaId: number) {
   );
   if (!m) throw notFound('Mesa');
   return m;
+}
+
+// ---------------------------------------------------------------------- El cliente pide la cuenta
+const ultimaCuentaPorIp = new Map<string, number>();
+/** Desde el QR: marca la cuenta de la mesa como «pidió la cuenta» y avisa a caja / barra al instante */
+export async function pedirCuentaQr(token: string, ip: string) {
+  const mesa = await mesaPorToken(token);
+  if (Date.now() - (ultimaCuentaPorIp.get(ip) ?? 0) < 30_000) throw new HttpError(429, 'Ya avisamos que pediste la cuenta. En un momento te la traen.');
+  const cuentas = await query<{ id: number; total: number; cobro_solicitado_en: string | null }>(
+    `SELECT id, total, cobro_solicitado_en FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' ORDER BY abierta_en`, [mesa.id]);
+  const conConsumo = cuentas.filter((c) => Number(c.total) > 0);
+  if (!conConsumo.length) throw new HttpError(409, 'Tu mesa todavía no tiene consumos por cobrar.');
+  ultimaCuentaPorIp.set(ip, Date.now());
+  if (ultimaCuentaPorIp.size > 5000) ultimaCuentaPorIp.clear();
+  for (const c of conConsumo) {
+    if (c.cobro_solicitado_en) continue;
+    await query(`UPDATE cuentas SET cobro_solicitado_en = now(), cobro_nota = 'Pidió la cuenta desde el QR' WHERE id = $1`, [c.id]);
+    const cuenta = await detalleCuenta(c.id);
+    emitir({ tipo: 'cobro', accion: 'solicitado', cuenta_id: c.id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente,
+      mesonero: 'Cliente (QR)', mesonero_id: cuenta.mesonero_id });
+  }
+  return { ok: true };
 }

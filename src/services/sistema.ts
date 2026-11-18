@@ -55,6 +55,8 @@ export type Ajustes = {
   pedidos_qr_activo: boolean;
   /** Lo de cocina que pide el mesonero espera en la barra hasta que la barra lo envía (y ahí se imprime) */
   cocina_pasa_por_barra: boolean;
+  /** Los pedidos del QR se aceptan solos (pasan directo a cocina/barra sin que nadie los confirme) */
+  qr_auto_aceptar: boolean;
 };
 
 const DEFECTO: Ajustes = {
@@ -67,6 +69,7 @@ const DEFECTO: Ajustes = {
   ticket_pie: '',
   pedidos_qr_activo: true,
   cocina_pasa_por_barra: true,
+  qr_auto_aceptar: false,
 };
 
 export async function leerAjustes(db: Db = pool): Promise<Ajustes> {

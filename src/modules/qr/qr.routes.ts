@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { R, permitir } from '../../middlewares/auth.js';
 import {
-  aceptarPedidoQr, asegurarTablasQr, bandejaQr, cartaQr, crearPedidoQr, estadoPedidosQr, pedidoQrSchema, rechazarPedidoQr, regenerarQr,
+  aceptarPedidoQr, pedirCuentaQr, asegurarTablasQr, bandejaQr, cartaQr, crearPedidoQr, estadoPedidosQr, pedidoQrSchema, rechazarPedidoQr, regenerarQr,
 } from '../../services/pedidosQr.js';
 import { HttpError } from '../../utils/http.js';
 
@@ -27,6 +27,11 @@ qrRouter.get('/:token', async (req, res) => {
 qrRouter.post('/:token/pedidos', async (req, res) => {
   const datos = pedidoQrSchema.parse(req.body);
   res.status(201).json(await crearPedidoQr(String(req.params.token), datos, req.ip ?? 'desconocida'));
+});
+
+/** El cliente pide la cuenta desde su mesa */
+qrRouter.post('/:token/cuenta', async (req, res) => {
+  res.json(await pedirCuentaQr(String(req.params.token), req.ip ?? 'desconocida'));
 });
 
 /** ?ids=12,15 → estado de los pedidos que este teléfono envió */

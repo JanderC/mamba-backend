@@ -24,8 +24,22 @@ const ajustesSchema = z
     ticket_pie: z.string().max(300),
     pedidos_qr_activo: z.boolean(),
     cocina_pasa_por_barra: z.boolean(),
+    qr_auto_aceptar: z.boolean(),
   })
   .partial();
+
+/** Interruptores de operación que la gerencia cambia desde el tablero de pedidos (sin tocar el resto de la configuración) */
+configRouter.put('/operacion', permitir('gerente'), async (req, res) => {
+  const cambios = z.object({ qr_auto_aceptar: z.boolean(), cocina_pasa_por_barra: z.boolean() }).partial().parse(req.body);
+  for (const [clave, valor] of Object.entries(cambios)) {
+    await query(
+      `INSERT INTO ajustes (clave, valor) VALUES ($1, $2::jsonb)
+       ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = now()`,
+      [clave, JSON.stringify(valor)],
+    );
+  }
+  res.json(await leerAjustes());
+});
 
 configRouter.put('/ajustes', permitir(), async (req, res) => {
   const cambios = ajustesSchema.parse(req.body);
