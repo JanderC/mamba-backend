@@ -3,3 +3,6 @@ dist
 .env
 .env.*
 !.env.example
+
+# Lista del equipo para crear_usuarios.mjs (nombres y correos: no se sube)
+scripts/equipo.local.json
