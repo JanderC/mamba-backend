@@ -242,7 +242,9 @@ cuentasRouter.patch('/:id', permitir(...R.servicio), async (req, res) => {
     await recalcular(db, id);
   });
   const cuenta = await detalleCuenta(id);
-  emitir({ tipo: 'cuenta', accion: 'editada', cuenta_id: id, mesonero_id: cuenta.mesonero_id });
+  // Si cambió el mesonero, al nuevo le llega «te asignaron esta mesa»
+  emitir({ tipo: 'cuenta', accion: b.mesonero_id !== undefined ? 'asignada' : 'editada', cuenta_id: id, mesonero_id: cuenta.mesonero_id,
+    ...(b.mesonero_id !== undefined && { lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente }) });
   res.json(cuenta);
 });
 

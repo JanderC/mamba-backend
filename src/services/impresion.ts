@@ -25,14 +25,15 @@ export function asegurarImpresion() {
 export const SELECT_COMANDA = `
   SELECT i.id, i.cuenta_id, i.nombre, i.presentacion, i.cantidad, i.asiento, i.notas, i.estado, i.estacion, i.ronda, i.creado_en,
          c.numero AS cuenta, c.tipo, c.nombre_cliente, c.asiento AS puesto, m.numero AS mesa_numero, m.nombre AS mesa_nombre,
-         m.tipo AS mesa_tipo, z.nombre AS zona, u.nombre AS mesonero,
+         m.tipo AS mesa_tipo, z.nombre AS zona, u.nombre AS mesonero, c.mesonero_id, mc.nombre AS asignado,
          COALESCE((SELECT json_agg(json_build_object('tipo', x.tipo, 'nombre', x.nombre, 'cantidad', x.cantidad) ORDER BY x.tipo, x.id)
                      FROM cuenta_item_modificadores x WHERE x.item_id = i.id), '[]'::json) AS modificadores
     FROM cuenta_items i
     JOIN cuentas c ON c.id = i.cuenta_id
     LEFT JOIN mesas m ON m.id = c.mesa_id
     LEFT JOIN zonas z ON z.id = m.zona_id
-    LEFT JOIN usuarios u ON u.id = i.usuario_id`;
+    LEFT JOIN usuarios u ON u.id = i.usuario_id
+    LEFT JOIN usuarios mc ON mc.id = c.mesonero_id`;
 
 /** Toma (y marca como impresos) los ítems nuevos de esas estaciones que nadie ha impreso todavía */
 export async function reclamarParaImprimir(estaciones: string[]) {

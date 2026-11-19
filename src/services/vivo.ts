@@ -15,7 +15,7 @@ export type EventoVivo =
   /** Un mesonero pasó (o retiró) una cuenta a la cola de cobro */
   | { tipo: 'cobro'; accion: 'solicitado' | 'cancelado' | 'cobrado'; cuenta_id: number; numero: string; lugar: string; cliente: string | null; mesonero: string | null; mesonero_id: number | null }
   /** Cualquier otro cambio en una cuenta (abierta, pagada, anulada, ítem anulado…) */
-  | { tipo: 'cuenta'; accion: string; cuenta_id: number; mesonero_id?: number | null }
+  | { tipo: 'cuenta'; accion: string; cuenta_id: number; mesonero_id?: number | null; lugar?: string; cliente?: string | null }
   /** Un cliente pidió desde el QR de su mesa (nuevo) o la barra lo atendió */
   | { tipo: 'pedido_qr'; accion: 'nuevo' | 'aceptado' | 'rechazado'; id: number; mesa_id: number; lugar: string; cliente: string | null; items: number; total: number; moneda: string; cuenta_id?: number | null }
   /** WhatsApp vinculado: cambió la conexión, entró o salió un mensaje, o cambió su ✓ */

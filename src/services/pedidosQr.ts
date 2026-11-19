@@ -287,7 +287,7 @@ export async function regenerarQr(mesaId: number) {
 // ---------------------------------------------------------------------- El cliente pide la cuenta
 const ultimaCuentaPorIp = new Map<string, number>();
 /** Desde el QR: marca la cuenta de la mesa como «pidió la cuenta» y avisa a caja / barra al instante */
-export async function pedirCuentaQr(token: string, ip: string) {
+export async function pedirCuentaQr(token: string, ip: string, pago?: string | null) {
   const mesa = await mesaPorToken(token);
   if (Date.now() - (ultimaCuentaPorIp.get(ip) ?? 0) < 30_000) throw new HttpError(429, 'Ya avisamos que pediste la cuenta. En un momento te la traen.');
   const cuentas = await query<{ id: number; total: number; cobro_solicitado_en: string | null }>(
@@ -297,11 +297,38 @@ export async function pedirCuentaQr(token: string, ip: string) {
   ultimaCuentaPorIp.set(ip, Date.now());
   if (ultimaCuentaPorIp.size > 5000) ultimaCuentaPorIp.clear();
   for (const c of conConsumo) {
-    if (c.cobro_solicitado_en) continue;
-    await query(`UPDATE cuentas SET cobro_solicitado_en = now(), cobro_nota = 'Pidió la cuenta desde el QR' WHERE id = $1`, [c.id]);
+    const nota = `Pidió la cuenta desde el QR${pago ? ` · pagará con ${pago}` : ''}`;
+    if (c.cobro_solicitado_en) { if (pago) await query(`UPDATE cuentas SET cobro_nota = $2 WHERE id = $1`, [c.id, nota]); continue; }
+    await query(`UPDATE cuentas SET cobro_solicitado_en = now(), cobro_nota = $2 WHERE id = $1`, [c.id, nota]);
     const cuenta = await detalleCuenta(c.id);
     emitir({ tipo: 'cobro', accion: 'solicitado', cuenta_id: c.id, numero: cuenta.numero, lugar: lugarDe(cuenta), cliente: cuenta.nombre_cliente,
       mesonero: 'Cliente (QR)', mesonero_id: cuenta.mesonero_id });
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------- El cliente ve su cuenta
+/** Lo que consumió la mesa, el total en las tres monedas y cómo se puede pagar (con los datos de cada método) */
+export async function cuentaQr(token: string) {
+  const mesa = await mesaPorToken(token);
+  const ids = await query<{ id: number }>(`SELECT id FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' ORDER BY abierta_en`, [mesa.id]);
+  const cuentas = await Promise.all(ids.map(async ({ id }) => {
+    const c = await detalleCuenta(id);
+    // Agrupa lo consumido por producto y presentación (sin anulados)
+    const lineas = new Map<string, { nombre: string; presentacion: string | null; cantidad: number; subtotal: number }>();
+    for (const i of c.items as { nombre: string; presentacion: string | null; cantidad: number; subtotal: number; estado: string }[]) {
+      if (i.estado === 'anulado') continue;
+      const k = `${i.nombre}|${i.presentacion ?? ''}`;
+      const l = lineas.get(k) ?? { nombre: i.nombre, presentacion: i.presentacion, cantidad: 0, subtotal: 0 };
+      l.cantidad += Number(i.cantidad); l.subtotal += Number(i.subtotal);
+      lineas.set(k, l);
+    }
+    return {
+      numero: c.numero, nombre_cliente: c.nombre_cliente, moneda: c.moneda, subtotal: Number(c.subtotal), servicio: Number(c.servicio),
+      descuento: Number(c.descuento), total: Number(c.total), pagado: Number(c.pagado), saldo: Number(c.saldo),
+      equivalentes: c.equivalentes, pidio_cuenta: !!c.cobro_solicitado_en, lineas: [...lineas.values()],
+    };
+  }));
+  const metodos = await query(`SELECT nombre, es_efectivo, monedas, datos_pago FROM metodos_pago WHERE activo ORDER BY orden, nombre`);
+  return { cuentas, metodos };
 }

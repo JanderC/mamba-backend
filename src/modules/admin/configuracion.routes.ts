@@ -171,6 +171,7 @@ const metodoSchema = z.object({
   requiere_referencia: z.boolean().default(false),
   orden: z.number().int().default(0),
   activo: z.boolean().default(true),
+  datos_pago: z.string().trim().max(300).nullish(),
 });
 
 metodosRouter.post('/', permitir(...R.gestion), async (req, res) => {
@@ -178,8 +179,8 @@ metodosRouter.post('/', permitir(...R.gestion), async (req, res) => {
   const [dup] = await query(`SELECT 1 FROM metodos_pago WHERE lower(nombre) = lower($1)`, [m.nombre]);
   if (dup) throw new HttpError(409, 'Ya existe un método de pago con ese nombre');
   const [n] = await query(
-    `INSERT INTO metodos_pago (nombre, es_efectivo, monedas, requiere_referencia, orden, activo) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [m.nombre, m.es_efectivo, m.monedas, m.requiere_referencia, m.orden, m.activo],
+    `INSERT INTO metodos_pago (nombre, es_efectivo, monedas, requiere_referencia, orden, activo, datos_pago) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [m.nombre, m.es_efectivo, m.monedas, m.requiere_referencia, m.orden, m.activo, m.datos_pago || null],
   );
   res.status(201).json(n);
 });
@@ -187,8 +188,8 @@ metodosRouter.post('/', permitir(...R.gestion), async (req, res) => {
 metodosRouter.put('/:id', permitir(...R.gestion), async (req, res) => {
   const m = metodoSchema.parse(req.body);
   const [n] = await query(
-    `UPDATE metodos_pago SET nombre=$2, es_efectivo=$3, monedas=$4, requiere_referencia=$5, orden=$6, activo=$7 WHERE id=$1 RETURNING *`,
-    [req.params.id, m.nombre, m.es_efectivo, m.monedas, m.requiere_referencia, m.orden, m.activo],
+    `UPDATE metodos_pago SET nombre=$2, es_efectivo=$3, monedas=$4, requiere_referencia=$5, orden=$6, activo=$7, datos_pago=$8 WHERE id=$1 RETURNING *`,
+    [req.params.id, m.nombre, m.es_efectivo, m.monedas, m.requiere_referencia, m.orden, m.activo, m.datos_pago || null],
   );
   if (!n) throw notFound('Método de pago');
   res.json(n);

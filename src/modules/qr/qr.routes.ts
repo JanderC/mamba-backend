@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { R, permitir } from '../../middlewares/auth.js';
 import {
-  aceptarPedidoQr, pedirCuentaQr, asegurarTablasQr, bandejaQr, cartaQr, crearPedidoQr, estadoPedidosQr, pedidoQrSchema, rechazarPedidoQr, regenerarQr,
+  aceptarPedidoQr, cuentaQr, pedirCuentaQr, asegurarTablasQr, bandejaQr, cartaQr, crearPedidoQr, estadoPedidosQr, pedidoQrSchema, rechazarPedidoQr, regenerarQr,
 } from '../../services/pedidosQr.js';
 import { HttpError } from '../../utils/http.js';
 
@@ -31,7 +31,14 @@ qrRouter.post('/:token/pedidos', async (req, res) => {
 
 /** El cliente pide la cuenta desde su mesa */
 qrRouter.post('/:token/cuenta', async (req, res) => {
-  res.json(await pedirCuentaQr(String(req.params.token), req.ip ?? 'desconocida'));
+  const { pago } = z.object({ pago: z.string().trim().max(80).nullish() }).parse(req.body ?? {});
+  res.json(await pedirCuentaQr(String(req.params.token), req.ip ?? 'desconocida', pago));
+});
+
+/** El cliente ve su cuenta: lo consumido, el total en pesos / dólares / bolívares y los datos para pagar */
+qrRouter.get('/:token/cuenta', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(await cuentaQr(String(req.params.token)));
 });
 
 /** ?ids=12,15 → estado de los pedidos que este teléfono envió */
