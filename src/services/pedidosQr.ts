@@ -58,6 +58,10 @@ export async function cartaQr(token: string) {
     mesa: { numero: mesa.numero, nombre: mesa.nombre, zona: mesa.zona, lugar: lugarMesa(mesa) },
     moneda: ajustes.moneda_principal,
     pedidos_activos: ajustes.pedidos_qr_activo,
+    // Para preguntar «¿estás con ellos?» si la mesa sigue con la cuenta de otro grupo
+    cuentas_abiertas: await query(
+      `SELECT id, COALESCE(nombre_cliente, 'sin nombre') AS nombre, personas, floor(extract(epoch FROM now() - abierta_en) / 60)::int AS minutos
+         FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' ORDER BY abierta_en`, [mesa.id]),
     categorias: catalogo.categorias.map((c) => ({
       ...c,
       productos: c.productos.map((p: any) => ({
@@ -137,7 +141,22 @@ export const pedidoQrSchema = z.object({
   nota: z.string().trim().max(200).nullish(),
   // Desde el QR no se eligen puestos: la cuenta se divide luego en caja si hace falta
   items: z.array(itemSchema.omit({ asiento: true })).min(1, 'Agrega al menos un producto').max(30, 'Máximo 30 productos por pedido'),
+  // Mesa ocupada por otro grupo: el cliente se suma a una cuenta abierta o pide cuenta aparte
+  unirse_a: z.number().int().nullish(),
+  cuenta_nueva: z.boolean().default(false),
+  // Pedidos anteriores de este teléfono: sus siguientes pedidos van a la misma cuenta, sin preguntar
+  previos: z.array(z.number().int()).max(20).default([]),
 });
+
+/** La cuenta abierta de este teléfono en esta mesa (la de su último pedido aceptado), si la tiene */
+export async function cuentaDelTelefono(mesaId: number, previos: number[], db: Db = pool) {
+  if (!previos.length) return null;
+  const [r] = await query<{ id: number }>(
+    `SELECT c.id FROM pedidos_qr p JOIN cuentas c ON c.id = p.cuenta_id
+      WHERE p.mesa_id = $1 AND p.id = ANY($2::bigint[]) AND c.estado = 'abierta' ORDER BY p.id DESC LIMIT 1`,
+    [mesaId, previos], db);
+  return r?.id ?? null;
+}
 
 const ultimoPorIp = new Map<string, number>();
 
@@ -156,10 +175,18 @@ export async function crearPedidoQr(token: string, datos: z.infer<typeof pedidoQ
   const moneda = ajustes.moneda_principal;
   const { lineas, total } = await cotizar(pool, items, moneda, await tasaVigente());
 
+  // ¿A qué cuenta va? La de este teléfono; si no, la que eligió el cliente; o una aparte si son clientes nuevos
+  let destino = await cuentaDelTelefono(mesa.id, datos.previos);
+  if (!destino && datos.unirse_a) {
+    const [c] = await query(`SELECT id FROM cuentas WHERE id = $1 AND mesa_id = $2 AND estado = 'abierta'`, [datos.unirse_a, mesa.id]);
+    if (!c) throw new HttpError(409, 'Esa cuenta ya se cerró. Vuelve a enviar tu pedido.');
+    destino = c.id;
+  }
+  const nueva = !destino && datos.cuenta_nueva;
   const [p] = await query<{ id: number; creado_en: string }>(
-    `INSERT INTO pedidos_qr (mesa_id, nombre_cliente, nota, items, resumen, moneda, total_estimado, ip)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, creado_en`,
-    [mesa.id, datos.nombre_cliente || null, datos.nota || null, JSON.stringify(items), JSON.stringify(lineas), moneda, total, ip],
+    `INSERT INTO pedidos_qr (mesa_id, nombre_cliente, nota, items, resumen, moneda, total_estimado, ip, cuenta_destino, cuenta_nueva)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, creado_en`,
+    [mesa.id, datos.nombre_cliente || null, datos.nota || null, JSON.stringify(items), JSON.stringify(lineas), moneda, total, ip, destino, nueva],
   );
   ultimoPorIp.set(ip, ahora);
   if (ultimoPorIp.size > 5000) ultimoPorIp.clear();
@@ -204,6 +231,7 @@ export async function estadoPedidosQr(token: string, ids: number[]) {
 export async function bandejaQr() {
   return query(
     `SELECT p.id, p.mesa_id, p.cuenta_id, p.nombre_cliente, p.nota, p.resumen, p.moneda, p.total_estimado AS total, p.estado, p.motivo,
+            p.cuenta_nueva, p.cuenta_destino, (SELECT numero FROM cuentas WHERE id = p.cuenta_destino) AS destino_numero,
             p.creado_en, p.atendido_en, u.nombre AS atendido_por, m.numero AS mesa_numero, m.nombre AS mesa_nombre, m.tipo AS mesa_tipo, z.nombre AS zona,
             COALESCE((SELECT json_agg(json_build_object('id', c.id, 'numero', c.numero, 'nombre_cliente', c.nombre_cliente, 'mesonero', mu.nombre) ORDER BY c.abierta_en)
                         FROM cuentas c LEFT JOIN usuarios mu ON mu.id = c.mesonero_id
@@ -233,6 +261,16 @@ export async function aceptarPedidoQr(id: number, usuario: UsuarioToken, cuentaE
     const pedido = await pedidoPendiente(db, id);
     const [mesa] = await query(`SELECT id, numero, tipo FROM mesas WHERE id = $1`, [pedido.mesa_id], db);
     let cuentaId: number | null = cuentaElegida;
+    // Lo que eligió el cliente: su cuenta (si sigue abierta) o una cuenta aparte para clientes nuevos
+    if (!cuentaId && pedido.cuenta_destino) {
+      const [d] = await query(`SELECT id FROM cuentas WHERE id = $1 AND estado = 'abierta'`, [pedido.cuenta_destino], db);
+      if (d) cuentaId = d.id;
+    }
+    if (!cuentaId && pedido.cuenta_nueva) {
+      cuentaId = await abrirCuentaEn(db, {
+        tipo: mesa.tipo === 'barra' ? 'barra' : 'mesa', mesa_id: mesa.id, personas: 1, nombre_cliente: pedido.nombre_cliente,
+      }, usuario.id);
+    }
     if (cuentaId) {
       const [c] = await query(`SELECT estado FROM cuentas WHERE id = $1`, [cuentaId], db);
       if (!c || c.estado !== 'abierta') throw new HttpError(409, 'Esa cuenta ya no está abierta');
@@ -287,11 +325,12 @@ export async function regenerarQr(mesaId: number) {
 // ---------------------------------------------------------------------- El cliente pide la cuenta
 const ultimaCuentaPorIp = new Map<string, number>();
 /** Desde el QR: marca la cuenta de la mesa como «pidió la cuenta» y avisa a caja / barra al instante */
-export async function pedirCuentaQr(token: string, ip: string, pago?: string | null) {
+export async function pedirCuentaQr(token: string, ip: string, pago?: string | null, previos: number[] = []) {
   const mesa = await mesaPorToken(token);
   if (Date.now() - (ultimaCuentaPorIp.get(ip) ?? 0) < 30_000) throw new HttpError(429, 'Ya avisamos que pediste la cuenta. En un momento te la traen.');
+  const propia = await cuentaDelTelefono(mesa.id, previos);
   const cuentas = await query<{ id: number; total: number; cobro_solicitado_en: string | null }>(
-    `SELECT id, total, cobro_solicitado_en FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' ORDER BY abierta_en`, [mesa.id]);
+    `SELECT id, total, cobro_solicitado_en FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' AND ($2::bigint IS NULL OR id = $2) ORDER BY abierta_en`, [mesa.id, propia]);
   const conConsumo = cuentas.filter((c) => Number(c.total) > 0);
   if (!conConsumo.length) throw new HttpError(409, 'Tu mesa todavía no tiene consumos por cobrar.');
   ultimaCuentaPorIp.set(ip, Date.now());
@@ -309,9 +348,11 @@ export async function pedirCuentaQr(token: string, ip: string, pago?: string | n
 
 // ---------------------------------------------------------------------- El cliente ve su cuenta
 /** Lo que consumió la mesa, el total en las tres monedas y cómo se puede pagar (con los datos de cada método) */
-export async function cuentaQr(token: string) {
+export async function cuentaQr(token: string, previos: number[] = []) {
   const mesa = await mesaPorToken(token);
-  const ids = await query<{ id: number }>(`SELECT id FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' ORDER BY abierta_en`, [mesa.id]);
+  // La cuenta de este teléfono; si no pidió por QR, las abiertas de la mesa
+  const propia = await cuentaDelTelefono(mesa.id, previos);
+  const ids = propia ? [{ id: propia }] : await query<{ id: number }>(`SELECT id FROM cuentas WHERE mesa_id = $1 AND estado = 'abierta' ORDER BY abierta_en`, [mesa.id]);
   const cuentas = await Promise.all(ids.map(async ({ id }) => {
     const c = await detalleCuenta(id);
     // Agrupa lo consumido por producto y presentación (sin anulados)

@@ -31,14 +31,15 @@ qrRouter.post('/:token/pedidos', async (req, res) => {
 
 /** El cliente pide la cuenta desde su mesa */
 qrRouter.post('/:token/cuenta', async (req, res) => {
-  const { pago } = z.object({ pago: z.string().trim().max(80).nullish() }).parse(req.body ?? {});
-  res.json(await pedirCuentaQr(String(req.params.token), req.ip ?? 'desconocida', pago));
+  const { pago, previos } = z.object({ pago: z.string().trim().max(80).nullish(), previos: z.array(z.number().int()).max(20).default([]) }).parse(req.body ?? {});
+  res.json(await pedirCuentaQr(String(req.params.token), req.ip ?? 'desconocida', pago, previos));
 });
 
 /** El cliente ve su cuenta: lo consumido, el total en pesos / dólares / bolívares y los datos para pagar */
 qrRouter.get('/:token/cuenta', async (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json(await cuentaQr(String(req.params.token)));
+  const previos = String(req.query.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 20);
+  res.json(await cuentaQr(String(req.params.token), previos));
 });
 
 /** ?ids=12,15 → estado de los pedidos que este teléfono envió */
