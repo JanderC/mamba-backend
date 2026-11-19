@@ -27,7 +27,7 @@ export async function armarCatalogo() {
   const [categorias, productos, variantes, receta, adicionales, seleccionables] = await Promise.all([
     query(`SELECT id, nombre, icono, tipo, estacion FROM categorias_menu WHERE activo ORDER BY orden`),
     // vendidos: unidades de los últimos 30 días, para la pestaña «Más pedidos» del POS
-    query(`SELECT p.id, p.categoria_id, p.nombre, p.descripcion, p.moneda_base, p.disponible, p.destacado,
+    query(`SELECT p.id, p.categoria_id, p.nombre, p.descripcion, p.moneda_base, p.disponible, p.destacado, p.imagen_url,
                   COALESCE((SELECT SUM(i.cantidad) FROM cuenta_items i
                              WHERE i.producto_id = p.id AND i.estado <> 'anulado' AND i.creado_en > now() - interval '30 days'), 0) AS vendidos
              FROM productos p WHERE p.visible_pos ORDER BY p.orden, p.nombre`),
@@ -47,7 +47,7 @@ export async function armarCatalogo() {
     productos: productos
       .filter((p) => p.categoria_id === c.id)
       .map((p) => ({
-        id: p.id, nombre: p.nombre, descripcion: p.descripcion, disponible: p.disponible, destacado: p.destacado, vendidos: Number(p.vendidos),
+        id: p.id, nombre: p.nombre, descripcion: p.descripcion, disponible: p.disponible, destacado: p.destacado, vendidos: Number(p.vendidos), imagen_url: p.imagen_url,
         variantes: variantes
           .filter((v) => v.producto_id === p.id)
           .map((v) => {
