@@ -323,9 +323,18 @@ cuentasRouter.post('/:id/pagos', permitir(...R.cobro, 'mesonero'), async (req, r
       asiento: z.number().int().nullish(),
       vuelto_moneda: z.enum(MONEDAS).nullish(),
       cerrar: z.boolean().default(false),
+      // Cobro por producto: qué unidades de qué productos paga esta persona
+      items: z.array(z.object({ id: z.number().int(), cantidad: z.number().positive() })).max(200).default([]),
     })
     .parse(req.body);
   const resultado = await tx(async (db) => {
+    for (const it of datos.items) {
+      const marcado = await query(
+        `UPDATE cuenta_items SET pagado_cantidad = pagado_cantidad + $3
+          WHERE id = $1 AND cuenta_id = $2 AND estado <> 'anulado' AND pagado_cantidad + $3 <= cantidad RETURNING id`,
+        [it.id, id, it.cantidad], db);
+      if (!marcado.length) throw new HttpError(409, 'Alguno de esos productos ya estaba pagado: actualiza y vuelve a elegir');
+    }
     const r = await pagar(db, id, datos, req.usuario);
     // Atendida: sale de la cola de cobro
     await query(`UPDATE cuentas SET cobro_solicitado_en = NULL, cobro_solicitado_por = NULL, cobro_nota = NULL WHERE id = $1`, [id], db);
