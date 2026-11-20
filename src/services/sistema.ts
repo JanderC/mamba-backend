@@ -57,6 +57,10 @@ export type Ajustes = {
   cocina_pasa_por_barra: boolean;
   /** Los pedidos del QR se aceptan solos (pasan directo a cocina/barra sin que nadie los confirme) */
   qr_auto_aceptar: boolean;
+  /** Cierre diario automático: números de WhatsApp y correos (separados por coma) y hora en que se manda */
+  cierre_whatsapp: string;
+  cierre_email: string;
+  cierre_hora: number;
 };
 
 const DEFECTO: Ajustes = {
@@ -70,6 +74,9 @@ const DEFECTO: Ajustes = {
   pedidos_qr_activo: true,
   cocina_pasa_por_barra: true,
   qr_auto_aceptar: false,
+  cierre_whatsapp: '',
+  cierre_email: '',
+  cierre_hora: 6,
 };
 
 export async function leerAjustes(db: Db = pool): Promise<Ajustes> {

@@ -62,7 +62,7 @@ export async function enviarWhatsApp(destino: string, texto: string) {
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** Email vía Resend. Solo se ejecuta si hay API key configurada. */
-async function enviarEmail(to: string, subject: string, texto: string) {
+export async function enviarEmail(to: string, subject: string, texto: string) {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return false;
   const html = `<div style="font-family:system-ui,sans-serif;background:#04140f;color:#f3e9c6;padding:24px;border-radius:12px">
     <h2 style="color:#d4af37;margin:0 0 12px">Mamba Bistro Bar 2.0</h2>

@@ -13,6 +13,7 @@ import { conectarVivo } from '../../services/vivo.js';
 import { pedidosQrRouter } from '../qr/qr.routes.js';
 import { comandasRouter, cuentasRouter, posRouter } from './ventas.routes.js';
 import { whatsappRouter } from './whatsapp.routes.js';
+import { asistenciaRouter } from './asistencia.routes.js';
 import { galeriaAdminRouter, subirImagenRouter } from '../imagenes/imagenes.routes.js';
 
 /**
@@ -48,6 +49,7 @@ adminRouter.use('/eventos', permitir(...R.comercial), eventosAdminRouter);
 adminRouter.use('/recordatorios', recordatoriosRouter);
 adminRouter.use('/clientes', clientesRouter);
 adminRouter.use('/whatsapp', whatsappRouter);
+adminRouter.use('/asistencia', asistenciaRouter);
 adminRouter.use('/galeria', permitir('gerente', 'rrpp'), galeriaAdminRouter);
 adminRouter.use('/imagenes', permitir('gerente', 'rrpp'), subirImagenRouter);
 

@@ -25,6 +25,9 @@ const ajustesSchema = z
     pedidos_qr_activo: z.boolean(),
     cocina_pasa_por_barra: z.boolean(),
     qr_auto_aceptar: z.boolean(),
+    cierre_whatsapp: z.string().max(300),
+    cierre_email: z.string().max(300),
+    cierre_hora: z.number().int().min(0).max(23),
   })
   .partial();
 

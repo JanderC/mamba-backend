@@ -187,8 +187,8 @@ cajaRouter.post('/sesiones/:id/cerrar', async (req, res) => {
  * los ingresos y egresos de caja, lo que falta por cobrar y el detalle de cada cobro. Es lo que mira el
  * administrador para saber cómo va la noche.
  */
-cajaRouter.get('/diario', async (req, res) => {
-  const { fecha } = z.object({ fecha: z.iso.date().optional() }).parse(req.query);
+/** Todo lo del día (se usa en la pantalla y en el cierre diario que se manda por WhatsApp / correo) */
+export async function resumenDiario(fecha?: string) {
   const F = fecha ? '$1::date' : JORNADA_HOY;
   const p = fecha ? [fecha] : [];
   const [ajustes, tasa] = await Promise.all([leerAjustes(), tasaVigente()]);
@@ -251,7 +251,7 @@ cajaRouter.get('/diario', async (req, res) => {
   const cuentasCobradas = new Set(validos.map((x) => x.cuenta_id)).size;
   const vendidoUsd = vendido.reduce((t, x) => t + Number(x.usd), 0);
 
-  res.json({
+  return {
     fecha: dia.fecha, es_hoy: dia.es_hoy, moneda: principal, tasa,
     totales: {
       cobrado: enPrincipal(cobradoUsd), cobrado_usd: redondear(cobradoUsd, 2),
@@ -273,5 +273,17 @@ cajaRouter.get('/diario', async (req, res) => {
       return { id: s.id, caja: r.sesion.caja, estado: r.sesion.estado, usuario: r.sesion.usuario, fecha_apertura: r.sesion.fecha_apertura,
         fecha_cierre: r.sesion.fecha_cierre, esperado: r.esperado, total_usd: r.total_usd };
     })),
-  });
+  };
+}
+
+cajaRouter.get('/diario', async (req, res) => {
+  const { fecha } = z.object({ fecha: z.iso.date().optional() }).parse(req.query);
+  res.json(await resumenDiario(fecha));
+});
+
+/** Manda ya el cierre del día (o de una fecha) a los WhatsApp y correos configurados */
+cajaRouter.post('/diario/enviar', async (req, res) => {
+  const { fecha } = z.object({ fecha: z.iso.date().optional() }).parse(req.body ?? {});
+  const { enviarCierreDiario } = await import('../../services/cierreDiario.js');
+  res.json(await enviarCierreDiario(fecha));
 });

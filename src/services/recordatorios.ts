@@ -50,6 +50,14 @@ export function iniciarTareasProgramadas() {
       .catch((e) => console.error('[cron] recordatorios', e.message));
   });
 
+  // Cierre diario por WhatsApp / correo: se revisa cada hora y sale a la hora configurada (una vez por jornada)
+  cron.schedule('2 * * * *', () => {
+    import('./cierreDiario.js')
+      .then((m) => m.cierreDiarioProgramado())
+      .then((r) => r && console.log('[cron] cierre diario enviado', r.fecha, r.enviados, r.fallidos))
+      .catch((e) => console.error('[cron] cierre diario', e.message));
+  });
+
   // Tasa oficial (BCV + TRM): todos los días a las 8:00 a.m. hora del negocio
   cron.schedule(
     '0 8 * * *',
